@@ -638,20 +638,80 @@ EOF
 CLIENT_ID="CLIENT_ID_PLACEHOLDER"
 API_URL="http://127.0.0.1:8000/upload-audit?client_id=$CLIENT_ID"
 
+# ── Connectivity check before uploading ───────────────────────────────────────
+SERVER_HOST=$(echo "$API_URL" | sed 's|http://||' | cut -d'/' -f1 | cut -d':' -f1)
+SERVER_PORT=$(echo "$API_URL" | sed 's|http://||' | cut -d'/' -f1 | cut -d':' -f2)
+SERVER_PORT="${SERVER_PORT:-8000}"
+
+echo "Checking connection to server ($SERVER_HOST:$SERVER_PORT)..."
+if command -v nc >/dev/null 2>&1; then
+    nc -z -w 5 "$SERVER_HOST" "$SERVER_PORT" 2>/dev/null
+    NC_RC=$?
+elif command -v bash >/dev/null 2>&1; then
+    (echo > /dev/tcp/"$SERVER_HOST"/"$SERVER_PORT") 2>/dev/null
+    NC_RC=$?
+else
+    NC_RC=0   # skip check if neither available
+fi
+
+if [ "$NC_RC" -ne 0 ]; then
+    echo ""
+    echo "ERROR: Cannot reach server at $SERVER_HOST:$SERVER_PORT"
+    echo "Possible causes:"
+    echo "  1. Server is not running — start it with: uvicorn backend.main:app --host 0.0.0.0 --port 8000"
+    echo "  2. Windows Firewall is blocking port $SERVER_PORT"
+    echo "     Fix: run server as Administrator (it auto-adds the firewall rule)"
+    echo "  3. You are on a different network/subnet than the server"
+    echo "  4. Open this script URL directly in a browser to verify: $API_URL"
+    echo ""
+    echo "Press enter to exit..."
+    read -r
+    exit 1
+fi
+
 echo "Uploading secure payload to backend..."
 
-RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$API_URL" \
-     -H "Content-Type: application/json" \
-     -d "$JSON")
+# ── Upload with timeout — curl preferred, wget as fallback ───────────────────
+HTTP_STATUS=""
+BODY=""
 
-HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
-BODY=$(echo "$RESPONSE" | head -n -1)
+if command -v curl >/dev/null 2>&1; then
+    RESPONSE=$(curl -s \
+        --connect-timeout 10 \
+        --max-time 60 \
+        -w "\n%{http_code}" \
+        -X POST "$API_URL" \
+        -H "Content-Type: application/json" \
+        -d "$JSON" 2>/dev/null)
+    HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+elif command -v wget >/dev/null 2>&1; then
+    BODY=$(wget -q -O - \
+        --timeout=60 \
+        --tries=1 \
+        --header="Content-Type: application/json" \
+        --post-data="$JSON" \
+        "$API_URL" 2>/dev/null)
+    HTTP_STATUS=$?
+    [ "$HTTP_STATUS" -eq 0 ] && HTTP_STATUS=200 || HTTP_STATUS=500
+else
+    echo "ERROR: Neither curl nor wget is installed. Cannot upload audit data."
+    echo "Install curl:  sudo apt install curl  (Debian/Ubuntu)"
+    echo "               brew install curl       (macOS)"
+    echo "Press enter to exit..."
+    read -r
+    exit 1
+fi
 
-if [ "$HTTP_STATUS" -eq 200 ]; then
+if [ "$HTTP_STATUS" = "200" ]; then
     echo "Audit upload completed successfully!"
 else
     echo "Upload failed. HTTP Status: $HTTP_STATUS"
     echo "Details: $BODY"
+    echo ""
+    echo "Troubleshooting:"
+    echo "  - Ensure you opened the frontend using the server's Network IP, not localhost"
+    echo "  - Check server logs for errors"
 fi
 
 echo "Press enter to exit..."

@@ -61,6 +61,65 @@ app.add_middleware(
 
 sessions = {}
 
+
+def _get_lan_ip() -> str:
+    """Return the machine's LAN IP by connecting a UDP socket (no packet sent)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def _open_firewall_port(port: int = 8000):
+    """Add a Windows Firewall inbound rule for the given port (no-op on non-Windows)."""
+    if platform.system() != "Windows":
+        return
+    rule_name = f"Infrapulse Port {port}"
+    check = subprocess.run(
+        f'netsh advfirewall firewall show rule name="{rule_name}"',
+        shell=True, capture_output=True
+    )
+    if check.returncode != 0:
+        result = subprocess.run(
+            f'netsh advfirewall firewall add rule name="{rule_name}" '
+            f'dir=in action=allow protocol=TCP localport={port}',
+            shell=True, capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            logger.info(f"Firewall rule added: allow TCP port {port} inbound")
+        else:
+            logger.warning(
+                f"Could not add firewall rule automatically. "
+                f"Run as Administrator or add manually: "
+                f'netsh advfirewall firewall add rule name="{rule_name}" '
+                f"dir=in action=allow protocol=TCP localport={port}"
+            )
+    else:
+        logger.info(f"Firewall rule already exists for port {port}")
+
+
+@app.on_event("startup")
+async def _print_network_url():
+    lan_ip = _get_lan_ip()
+    _open_firewall_port(8000)
+    logger.info("=" * 54)
+    logger.info("  Infrapulse - NSDL IT Asset Management Portal")
+    logger.info("=" * 54)
+    logger.info(f"  Local   : http://localhost:8000")
+    logger.info(f"  Network : http://{lan_ip}:8000")
+    logger.info("  Share the Network URL with client workstations")
+    logger.info("-" * 54)
+    logger.info("  macOS : right-click .command -> Open, or run:")
+    logger.info("    bash verify_system_<id>.command")
+    logger.info("  Linux : run with:")
+    logger.info("    bash verify_system_<id>.sh")
+    logger.info("=" * 54)
+
+
 CONSENT_TEXT = (
     "We provide approval to NSDL e-Governance Infrastructure Ltd.(NSDL e-Gov) "
     "to capture the details regarding the System details and share the details "
