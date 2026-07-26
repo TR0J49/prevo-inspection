@@ -1062,6 +1062,8 @@
                     </div>
                 </div>
 
+                <div id="swDiffBar" style="display:none; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:12px; padding:10px 14px; background:var(--surface-2); border-radius:8px; border:1px solid var(--border);"></div>
+
                 <div class="search-wrap" style="margin-bottom:16px;">
                     <span class="search-icon">🔍</span>
                     <input type="text" class="input-field search-input" id="swSearch"
@@ -1699,6 +1701,7 @@ function exportScanResults() {
 //  TAB 4 — SOFTWARE INVENTORY
 // ────────────────────────────────────────────────────────────────────
 let swData = [];
+let swPreviousAudit = '';
 
 async function refreshDeviceList() {
     try {
@@ -1728,7 +1731,8 @@ async function loadSoftwareForDevice() {
     try {
         const r    = await fetch(`/api/software/${encodeURIComponent(name)}`);
         const data = await r.json();
-        swData     = data.software_inventory || [];
+        swData           = data.software_inventory || [];
+        swPreviousAudit  = data.previous_audit || '';
 
         document.getElementById('swDeviceTitle').textContent = `${name}`;
         document.getElementById('swDeviceMeta').textContent  = `Last audited: ${data.last_audit || 'Unknown'} | Architecture: ${data.architecture || 'Unknown'}`;
@@ -1765,6 +1769,7 @@ async function loadSoftwareForDevice() {
 
         document.getElementById('swEmpty').style.display     = 'none';
         document.getElementById('softwarePanel').style.display = 'block';
+        renderSwDiffBar(swData, swPreviousAudit);
         renderSoftwareTable(swData);
     } catch(e) {
         alert('Failed to load software inventory. Run a compliance audit first.');
@@ -1772,26 +1777,92 @@ async function loadSoftwareForDevice() {
     }
 }
 
+function _swSortOrder(status) {
+    return { new: 0, updated: 1, unchanged: 2, removed: 3 }[status] ?? 2;
+}
+
+function _parseInstallDate(str) {
+    if (!str) return 0;
+    // Formats: "20230415", "2023-04-15", "04/15/2023", "15-04-2023" etc.
+    const clean = str.replace(/[^0-9]/g, '');
+    if (clean.length === 8) {
+        // Try YYYYMMDD first
+        const d = new Date(
+            clean.slice(0,4) + '-' + clean.slice(4,6) + '-' + clean.slice(6,8)
+        );
+        if (!isNaN(d)) return d.getTime();
+    }
+    const d = new Date(str);
+    return isNaN(d) ? 0 : d.getTime();
+}
+
+function renderSwDiffBar(apps, prevAudit) {
+    const bar = document.getElementById('swDiffBar');
+    if (!bar) return;
+    const counts = { new: 0, updated: 0, removed: 0 };
+    apps.forEach(a => { if (counts[a.change_status] !== undefined) counts[a.change_status]++; });
+    const hasChanges = counts.new || counts.updated || counts.removed;
+    if (!hasChanges || !prevAudit) {
+        bar.style.display = 'none';
+        return;
+    }
+    const parts = [];
+    if (counts.new)     parts.push(`<span class="badge badge-green">+${counts.new} new</span>`);
+    if (counts.updated) parts.push(`<span class="badge badge-blue">${counts.updated} updated</span>`);
+    if (counts.removed) parts.push(`<span class="badge badge-red">${counts.removed} removed</span>`);
+    bar.innerHTML = `<span style="color:var(--muted); font-size:13px;">Changes since ${prevAudit}:</span> ${parts.join(' ')}`;
+    bar.style.display = 'flex';
+}
+
 function renderSoftwareTable(apps) {
     const tbody = document.getElementById('swTableBody');
     if (!apps.length) {
-        tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
+        tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
             <div class="empty-icon">📭</div>
             <h3>No software data</h3>
             <p>Run a compliance audit scan on this device to populate software inventory.</p>
         </div></td></tr>`;
         return;
     }
-    tbody.innerHTML = apps.map((sw, i) => `
-        <tr>
+
+    // Sort: new → updated → unchanged (newest install_date first) → removed
+    const sorted = [...apps].sort((a, b) => {
+        const so = _swSortOrder(a.change_status) - _swSortOrder(b.change_status);
+        if (so !== 0) return so;
+        return _parseInstallDate(b.install_date) - _parseInstallDate(a.install_date);
+    });
+
+    const STATUS_BADGE = {
+        new:       `<span class="badge badge-green" style="font-size:10px;">NEW</span>`,
+        updated:   `<span class="badge badge-blue"  style="font-size:10px;">UPDATED</span>`,
+        removed:   `<span class="badge badge-red"   style="font-size:10px;">REMOVED</span>`,
+        unchanged: '',
+    };
+
+    tbody.innerHTML = sorted.map((sw, i) => {
+        const status    = sw.change_status || 'unchanged';
+        const badge     = STATUS_BADGE[status] || '';
+        const rowStyle  = status === 'removed'
+            ? 'opacity:0.5; text-decoration:line-through;'
+            : status === 'new'
+            ? 'background:rgba(4,120,87,0.04);'
+            : status === 'updated'
+            ? 'background:rgba(29,78,216,0.04);'
+            : '';
+        const versionHtml = status === 'updated' && sw.prev_version
+            ? `<span class="td-mono" style="color:var(--info);">${esc(sw.version || '—')}</span>
+               <span style="font-size:10px; color:var(--muted); display:block;">was: ${esc(sw.prev_version)}</span>`
+            : `<span class="td-mono" style="color:var(--info);">${esc(sw.version || '—')}</span>`;
+        return `
+        <tr style="${rowStyle}">
             <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
-            <td><b>${esc(sw.name || '—')}</b></td>
-            <td class="td-mono" style="color:var(--info);">${esc(sw.version || '—')}</td>
+            <td><b>${esc(sw.name || '—')}</b> ${badge}</td>
+            <td>${versionHtml}</td>
             <td style="color:var(--text-2);">${esc(sw.publisher || '—')}</td>
             <td style="color:var(--muted);">${esc(sw.install_date || '—')}</td>
             <td style="color:var(--muted);">${esc(sw.size_mb || '—')}</td>
-        </tr>
-    `).join('');
+        </tr>`;
+    }).join('');
 }
 
 function filterSoftware() {
@@ -1801,6 +1872,7 @@ function filterSoftware() {
         (sw.publisher || '').toLowerCase().includes(q) ||
         (sw.version   || '').toLowerCase().includes(q)
     );
+    renderSwDiffBar(filtered, swPreviousAudit);
     renderSoftwareTable(filtered);
 }
 

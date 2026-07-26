@@ -30,10 +30,11 @@ import time
 import re
 import platform
 
-# ── Directories & Logging ────────────────────────────────────────────────────
-LOGS_DIR          = "logs"
-USER_INFO_DIR     = "user_info"
-ASSET_METADATA_DIR = "user_info/assets"
+# ── Base Directory & Paths ───────────────────────────────────────────────────
+BASE_DIR           = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOGS_DIR           = os.path.join(BASE_DIR, "logs")
+USER_INFO_DIR      = os.path.join(BASE_DIR, "user_info")
+ASSET_METADATA_DIR = os.path.join(BASE_DIR, "user_info", "assets")
 
 for d in [LOGS_DIR, USER_INFO_DIR, ASSET_METADATA_DIR]:
     os.makedirs(d, exist_ok=True)
@@ -292,7 +293,7 @@ def check_status(client_id: str = Query(...)):
 def download_script(request: Request, client_id: str = Query(...)):
     base_url = str(request.base_url).rstrip("/")
     try:
-        with open("scripts/audit.ps1", "r") as f:
+        with open(os.path.join(BASE_DIR, "scripts", "audit.ps1"), "r") as f:
             content = f.read()
         content = content.replace("http://127.0.0.1:8000", base_url)
         content = content.replace("CLIENT_ID_PLACEHOLDER", client_id)
@@ -331,7 +332,7 @@ def download_vbs(
 def download_mac_script(request: Request, client_id: str = Query(...)):
     base_url = str(request.base_url).rstrip("/")
     try:
-        with open("scripts/audit.sh", "r") as f:
+        with open(os.path.join(BASE_DIR, "scripts", "audit.sh"), "r") as f:
             content = f.read()
         content = content.replace("http://127.0.0.1:8000", base_url)
         content = content.replace("CLIENT_ID_PLACEHOLDER", client_id)
@@ -504,7 +505,7 @@ def upload_audit(data: AuditData, client_id: str = Query(None)):
         cd_val      = "Not Installed" if data.drive_name == "No CD Unit Found" else data.drive_name
         printer_val = "Not Installed" if not data.printers else f"{len(data.printers)} connected"
         os_val      = "Not Installed" if data.os_name == "Unknown" else data.os_name
-        av_val      = "Not Installed" if not data.antivirus or "No antivirus" in av_str else av_str
+        av_val      = "Not Installed" if not data.antivirus or "No antivirus" in av_str or "No AV detected" in av_str else av_str
         comp_val    = "Not Installed" if not data.compression_utilities or "No compression" in compression_str else compression_str
 
         if cd_val == "Not Installed":
@@ -1028,30 +1029,60 @@ def list_audited_devices():
 
 @app.get("/api/software/{computer_name}")
 def get_software_for_device(computer_name: str):
-    latest_file  = None
-    latest_ts    = ""
-    latest_data  = None
+    # Collect all audit files for this device, sorted newest-first
+    audits = []
     if os.path.exists(USER_INFO_DIR):
         for fn in os.listdir(USER_INFO_DIR):
             if fn.endswith(".json") and fn.startswith("audit_"):
                 try:
-                    with open(f"{USER_INFO_DIR}/{fn}") as f:
+                    with open(os.path.join(USER_INFO_DIR, fn)) as f:
                         d = json.load(f)
-                    if d.get("computer_name","").lower() == computer_name.lower():
-                        ts = d.get("execution_datetime", "")
-                        if ts > latest_ts:
-                            latest_ts   = ts
-                            latest_file = fn
-                            latest_data = d
+                    if d.get("computer_name", "").lower() == computer_name.lower():
+                        audits.append((d.get("execution_datetime", ""), d))
                 except Exception:
                     pass
-    if not latest_data:
+    if not audits:
         raise HTTPException(status_code=404, detail=f"No audit found for device: {computer_name}")
+
+    audits.sort(key=lambda x: x[0], reverse=True)
+    latest_ts, latest_data = audits[0]
+    prev_ts, prev_data = audits[1] if len(audits) > 1 else ("", None)
+
+    # ── Incremental diff: tag each app with change_status ──────────────────────
+    def _sw_key(app):
+        """Normalised lookup key: lowercase app name."""
+        return (app.get("name") or "").strip().lower()
+
+    latest_sw = latest_data.get("software_inventory", [])
+
+    if prev_data:
+        prev_map = {_sw_key(a): a for a in prev_data.get("software_inventory", [])}
+        tagged = []
+        latest_keys = set()
+        for app in latest_sw:
+            key = _sw_key(app)
+            latest_keys.add(key)
+            if key not in prev_map:
+                tagged.append({**app, "change_status": "new", "prev_version": ""})
+            elif (app.get("version") or "").strip() != (prev_map[key].get("version") or "").strip():
+                tagged.append({**app, "change_status": "updated",
+                                "prev_version": prev_map[key].get("version", "")})
+            else:
+                tagged.append({**app, "change_status": "unchanged", "prev_version": ""})
+        # Apps present in previous audit but gone from latest → "removed"
+        for prev_app in prev_data.get("software_inventory", []):
+            if _sw_key(prev_app) not in latest_keys:
+                tagged.append({**prev_app, "change_status": "removed", "prev_version": ""})
+    else:
+        # Only one audit — sort by install_date newest-first, no diff
+        tagged = [{**app, "change_status": "unchanged", "prev_version": ""} for app in latest_sw]
+
     return {
         "computer_name":      computer_name,
         "last_audit":         latest_ts,
-        "software_inventory": latest_data.get("software_inventory", []),
-        "total":              len(latest_data.get("software_inventory", [])),
+        "previous_audit":     prev_ts,
+        "software_inventory": tagged,
+        "total":              len(latest_sw),
         "os_name":            latest_data.get("os_name", ""),
         "os_version":         latest_data.get("os_version", ""),
         "architecture":       latest_data.get("architecture", ""),
@@ -1142,12 +1173,11 @@ def network_scan(request: NetworkScanRequest):
     # ─────────────────────────────────────────────────────────────────────────
     def ping_host(ip_str: str):
         try:
-            subprocess.run(
-                ["ping", "-n", "1", "-w", "500", str(ip_str)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=1
-            )
+            if platform.system() == "Windows":
+                cmd = ["ping", "-n", "1", "-w", "500", str(ip_str)]
+            else:
+                cmd = ["ping", "-c", "1", "-W", "1", str(ip_str)]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
         except Exception:
             pass
 
@@ -1263,31 +1293,106 @@ def _run_cmd(cmd: str):
 
 @app.get("/wifi/networks")
 def get_wifi_networks():
-    """List nearby WiFi networks via netsh (Windows only)."""
-    if not _is_windows():
-        raise HTTPException(status_code=501, detail="WiFi scanning is only supported on Windows.")
-
-    stdout, _ = _run_cmd("netsh wlan show networks mode=bssid")
-
+    """List nearby WiFi networks. Supports Windows, macOS, and Linux."""
+    system = platform.system()
     networks = []
-    current: dict = {}
 
-    for line in stdout.splitlines():
-        line = line.strip()
-        if re.match(r'^SSID\s+\d+\s*:', line) and "BSSID" not in line:
+    if system == "Windows":
+        stdout, _ = _run_cmd("netsh wlan show networks mode=bssid")
+        current: dict = {}
+        for line in stdout.splitlines():
+            line = line.strip()
+            if re.match(r'^SSID\s+\d+\s*:', line) and "BSSID" not in line:
+                if current.get("ssid"):
+                    networks.append(current)
+                ssid_val = line.split(":", 1)[1].strip()
+                current = {"ssid": ssid_val, "authentication": "", "encryption": "", "signal": ""}
+            elif line.startswith("Authentication") and ":" in line:
+                current["authentication"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Encryption") and ":" in line:
+                current["encryption"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Signal") and ":" in line:
+                current["signal"] = line.split(":", 1)[1].strip()
+        if current.get("ssid"):
+            networks.append(current)
+
+    elif system == "Darwin":
+        airport = (
+            "/System/Library/PrivateFrameworks/Apple80211.framework"
+            "/Versions/Current/Resources/airport"
+        )
+        stdout, rc = _run_cmd(f'"{airport}" -s')
+        if rc != 0:
+            raise HTTPException(status_code=503, detail="Could not scan WiFi. Ensure WiFi adapter is enabled.")
+        for line in stdout.splitlines()[1:]:  # skip header row
+            if not line.strip():
+                continue
+            bssid_match = re.search(r'([0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2})', line)
+            if not bssid_match:
+                continue
+            bssid_pos = line.index(bssid_match.group(0))
+            ssid = line[:bssid_pos].strip()
+            rest = line[bssid_pos:].split()
+            try:
+                rssi_val  = int(rest[1]) if len(rest) > 1 else -100
+                signal_pct = str(max(0, min(100, 2 * (rssi_val + 100)))) + "%"
+            except (ValueError, IndexError):
+                signal_pct = "0%"
+            security = " ".join(rest[5:]) if len(rest) > 5 else "Open"
+            if ssid:
+                networks.append({
+                    "ssid": ssid,
+                    "authentication": security,
+                    "encryption": "AES" if any(x in security for x in ("WPA", "WEP")) else "None",
+                    "signal": signal_pct,
+                })
+
+    else:
+        # Linux — nmcli preferred, iwlist as fallback
+        stdout, rc = _run_cmd("nmcli -t -f SSID,SECURITY,SIGNAL device wifi list")
+        if rc == 0:
+            for line in stdout.splitlines():
+                if not line.strip():
+                    continue
+                # nmcli terse mode escapes literal colons as \: — split on unescaped colons only
+                parts = re.split(r'(?<!\\):', line)
+                ssid     = parts[0].replace("\\:", ":").strip() if len(parts) > 0 else ""
+                security = parts[1].strip() if len(parts) > 1 else "Open"
+                signal   = parts[2].strip() if len(parts) > 2 else "0"
+                if ssid:
+                    networks.append({
+                        "ssid": ssid,
+                        "authentication": security or "Open",
+                        "encryption": "AES" if security else "None",
+                        "signal": f"{signal}%",
+                    })
+        else:
+            # iwlist fallback
+            iface_out, _ = _run_cmd("iwconfig 2>/dev/null | grep 'IEEE 802' | awk '{print $1}' | head -1")
+            iface = iface_out.strip() or "wlan0"
+            stdout, _ = _run_cmd(f"iwlist {iface} scanning 2>/dev/null")
+            current = {}
+            for line in stdout.splitlines():
+                line = line.strip()
+                if "ESSID:" in line:
+                    m = re.search(r'ESSID:"(.*?)"', line)
+                    if m:
+                        if current.get("ssid"):
+                            networks.append(current)
+                        current = {"ssid": m.group(1), "authentication": "Unknown",
+                                   "encryption": "Unknown", "signal": "0%"}
+                elif "Encryption key:" in line:
+                    current["authentication"] = "WEP" if "on" in line.lower() else "Open"
+                elif "Signal level=" in line:
+                    m = re.search(r'Signal level=(-?\d+)', line)
+                    if m:
+                        try:
+                            pct = max(0, min(100, 2 * (int(m.group(1)) + 100)))
+                            current["signal"] = f"{pct}%"
+                        except ValueError:
+                            pass
             if current.get("ssid"):
                 networks.append(current)
-            ssid_val = line.split(":", 1)[1].strip()
-            current = {"ssid": ssid_val, "authentication": "", "encryption": "", "signal": ""}
-        elif line.startswith("Authentication") and ":" in line:
-            current["authentication"] = line.split(":", 1)[1].strip()
-        elif line.startswith("Encryption") and ":" in line:
-            current["encryption"] = line.split(":", 1)[1].strip()
-        elif line.startswith("Signal") and ":" in line:
-            current["signal"] = line.split(":", 1)[1].strip()
-
-    if current.get("ssid"):
-        networks.append(current)
 
     # Deduplicate: keep highest signal per SSID
     seen: dict = {}
@@ -1300,7 +1405,8 @@ def get_wifi_networks():
 
     result = [{k: v for k, v in net.items() if k != "_sig"} for net in seen.values()]
     result.sort(
-        key=lambda x: int(x.get("signal", "0%").replace("%", "")) if x.get("signal", "0%").replace("%", "").isdigit() else 0,
+        key=lambda x: int(x.get("signal", "0%").replace("%", ""))
+        if x.get("signal", "0%").replace("%", "").isdigit() else 0,
         reverse=True,
     )
     return {"networks": result, "total": len(result)}
@@ -1309,65 +1415,147 @@ def get_wifi_networks():
 @app.get("/wifi/current")
 def get_current_wifi():
     """Return the current WiFi connection info including derived /24 subnet."""
-    if not _is_windows():
-        return {"connected": False, "ssid": None, "ip": None, "subnet": None}
+    system = platform.system()
 
-    stdout, _ = _run_cmd("netsh wlan show interfaces")
+    def _derive_subnet(ip: str):
+        parts = ip.split(".")
+        return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24" if len(parts) == 4 else None
 
-    ssid         = None
-    state        = "disconnected"
-    adapter_name = None
+    if system == "Windows":
+        stdout, _ = _run_cmd("netsh wlan show interfaces")
+        ssid = None
+        state = "disconnected"
+        adapter_name = None
+        for line in stdout.splitlines():
+            line = line.strip()
+            if line.startswith("Name") and ":" in line and "Network" not in line and "Description" not in line:
+                adapter_name = line.split(":", 1)[1].strip()
+            elif line.startswith("State") and ":" in line:
+                state = line.split(":", 1)[1].strip().lower()
+            elif re.match(r'^SSID\s*:', line) and "BSSID" not in line:
+                ssid = line.split(":", 1)[1].strip()
+        connected  = state == "connected" and bool(ssid)
+        ip_address = None
+        if connected and adapter_name:
+            ip_out, _ = _run_cmd(f'netsh interface ip show addresses "{adapter_name}"')
+            for ln in ip_out.splitlines():
+                ln = ln.strip()
+                if ln.startswith("IP Address") and ":" in ln:
+                    ip_address = ln.split(":", 1)[1].strip()
+                    break
+        return {"connected": connected, "ssid": ssid, "state": state,
+                "adapter": adapter_name, "ip": ip_address,
+                "subnet": _derive_subnet(ip_address) if ip_address else None}
 
-    for line in stdout.splitlines():
-        line = line.strip()
-        if line.startswith("Name") and ":" in line and "Network" not in line and "Description" not in line:
-            adapter_name = line.split(":", 1)[1].strip()
-        elif line.startswith("State") and ":" in line:
-            state = line.split(":", 1)[1].strip().lower()
-        elif re.match(r'^SSID\s*:', line) and "BSSID" not in line:
-            ssid = line.split(":", 1)[1].strip()
+    elif system == "Darwin":
+        airport = (
+            "/System/Library/PrivateFrameworks/Apple80211.framework"
+            "/Versions/Current/Resources/airport"
+        )
+        stdout, _ = _run_cmd(f'"{airport}" -I')
+        ssid  = None
+        state = "disconnected"
+        for line in stdout.splitlines():
+            line = line.strip()
+            if re.match(r'^\s*SSID\s*:', line):
+                ssid = line.split(":", 1)[1].strip()
+            elif "state:" in line.lower():
+                state = line.split(":", 1)[1].strip().lower()
+        connected  = bool(ssid) and state != "init"
+        ip_address = None
+        if connected:
+            # Try en0 then en1 (Wi-Fi adapter varies by model)
+            for iface in ("en0", "en1"):
+                out, rc = _run_cmd(f"ipconfig getifaddr {iface} 2>/dev/null")
+                if rc == 0 and out.strip():
+                    ip_address = out.strip()
+                    break
+        return {"connected": connected, "ssid": ssid, "state": state,
+                "adapter": "AirPort", "ip": ip_address,
+                "subnet": _derive_subnet(ip_address) if ip_address else None}
 
-    connected  = (state == "connected" and bool(ssid))
-    ip_address = None
-    subnet     = None
-
-    if connected and adapter_name:
-        ip_out, _ = _run_cmd(f'netsh interface ip show addresses "{adapter_name}"')
-        for ln in ip_out.splitlines():
-            ln = ln.strip()
-            if ln.startswith("IP Address") and ":" in ln:
-                ip_address = ln.split(":", 1)[1].strip()
-                break
-
-        if ip_address:
-            parts = ip_address.split(".")
-            if len(parts) == 4:
-                subnet = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
-
-    return {
-        "connected":    connected,
-        "ssid":         ssid,
-        "state":        state,
-        "adapter":      adapter_name,
-        "ip":           ip_address,
-        "subnet":       subnet,
-    }
+    else:
+        # Linux
+        ssid  = None
+        iface = None
+        state = "disconnected"
+        stdout, rc = _run_cmd("nmcli -t -f NAME,TYPE,STATE,DEVICE connection show --active")
+        if rc == 0:
+            for line in stdout.splitlines():
+                # nmcli terse mode escapes literal colons as \: — split on unescaped colons only
+                parts = re.split(r'(?<!\\):', line)
+                if len(parts) >= 4 and "wifi" in parts[1].lower() and "activated" in parts[2].lower():
+                    ssid  = parts[0].replace("\\:", ":").strip()
+                    iface = parts[3].strip()
+                    state = "connected"
+                    break
+        if not ssid:
+            out, rc = _run_cmd("iwgetid -r 2>/dev/null")
+            if rc == 0 and out.strip():
+                ssid  = out.strip()
+                state = "connected"
+        ip_address = None
+        if iface:
+            out, _ = _run_cmd(f"ip addr show {iface} 2>/dev/null | grep 'inet ' | awk '{{print $2}}' | cut -d/ -f1")
+            ip_address = out.strip() or None
+        if not ip_address:
+            out, _ = _run_cmd("hostname -I 2>/dev/null | awk '{print $1}'")
+            ip_address = out.strip() or None
+        return {"connected": bool(ssid), "ssid": ssid, "state": state,
+                "adapter": iface or "wlan0", "ip": ip_address,
+                "subnet": _derive_subnet(ip_address) if ip_address else None}
 
 
 @app.post("/wifi/connect")
 def connect_wifi(req: WifiConnectRequest):
-    """Create a WPA2-Personal profile and connect to the given SSID."""
-    if not _is_windows():
-        raise HTTPException(status_code=501, detail="WiFi connect is only supported on Windows.")
-
+    """Connect to a WiFi network. Supports Windows, macOS, and Linux (nmcli)."""
+    system   = platform.system()
     ssid     = req.ssid
     password = req.password
 
     if not ssid:
         raise HTTPException(status_code=400, detail="SSID cannot be empty.")
-    if len(password) < 8:
+    if password and len(password) < 8:
         raise HTTPException(status_code=400, detail="WiFi password must be at least 8 characters.")
 
+    # ── macOS ──────────────────────────────────────────────────────────────────
+    if system == "Darwin":
+        iface_out, _ = _run_cmd(
+            "networksetup -listallhardwareports "
+            "| awk '/Wi-Fi|AirPort/{getline; print $2}' | head -1"
+        )
+        iface = iface_out.strip() or "en0"
+        cmd = (f'networksetup -setairportnetwork {iface} "{ssid}" "{password}"'
+               if password else f'networksetup -setairportnetwork {iface} "{ssid}"')
+        out, rc = _run_cmd(cmd)
+        if rc != 0 and out.strip():
+            return {"status": "error", "message": out.strip()}
+        for _ in range(12):
+            time.sleep(1)
+            cur = get_current_wifi()
+            if cur.get("connected") and cur.get("ssid") == ssid and cur.get("ip"):
+                return {"status": "connected", "ssid": ssid,
+                        "ip": cur["ip"], "subnet": cur["subnet"]}
+        return {"status": "connecting", "ssid": ssid,
+                "message": "Connection initiated. Waiting for IP."}
+
+    # ── Linux ──────────────────────────────────────────────────────────────────
+    if system == "Linux":
+        cmd = (f'nmcli device wifi connect "{ssid}" password "{password}"'
+               if password else f'nmcli device wifi connect "{ssid}"')
+        out, rc = _run_cmd(cmd)
+        if rc != 0:
+            return {"status": "error", "message": out.strip() or "nmcli connection failed."}
+        for _ in range(12):
+            time.sleep(1)
+            cur = get_current_wifi()
+            if cur.get("connected") and cur.get("ssid") == ssid and cur.get("ip"):
+                return {"status": "connected", "ssid": ssid,
+                        "ip": cur["ip"], "subnet": cur["subnet"]}
+        return {"status": "connecting", "ssid": ssid,
+                "message": "Connection initiated. Waiting for IP."}
+
+    # ── Windows ────────────────────────────────────────────────────────────────
     def _xml_esc(s: str) -> str:
         return (s.replace("&", "&amp;")
                  .replace("<", "&lt;").replace(">", "&gt;")
@@ -1515,10 +1703,17 @@ class NotificationRequest(BaseModel):
 
 @app.post("/audit/send-notification")
 def send_notification(req: NotificationRequest):
-    winrm = None
-    PsExecClient = None
-    if not winrm or not PsExecClient:
+    try:
+        import winrm as winrm_lib
+    except ImportError:
+        winrm_lib = None
+    try:
+        from pypsexec.client import Client as PsExecClient
+    except ImportError:
+        PsExecClient = None
+    if not winrm_lib and not PsExecClient:
         raise HTTPException(status_code=500, detail="Missing winrm or pypsexec libraries.")
+    winrm = winrm_lib
     
     server_url = f"http://{socket.gethostbyname(socket.gethostname())}:8000"
     client_id = f"audit_{uuid.uuid4().hex[:12]}"
@@ -1611,7 +1806,6 @@ def get_audit_script(request: Request, client_id: str):
 # ==============================================================================
 # 10. SERVE FRONTEND (UI)
 # ==============================================================================
-BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SCRIPTS_DIR = os.path.join(BASE_DIR, "scripts")
 if os.path.exists(SCRIPTS_DIR):
