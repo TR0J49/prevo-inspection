@@ -1437,6 +1437,8 @@ def list_audited_devices():
                             computer_name,
                             executed_at                        AS last_seen,
                             audit_json->>'os_name'             AS os_name,
+                            audit_json->'hardware_details'->>'public_ip' AS ip,
+                            audit_json->>'username'            AS username,
                             json_path                          AS file
                         FROM audit_results
                         ORDER BY computer_name, created_at DESC
@@ -1456,10 +1458,37 @@ def list_audited_devices():
                     name = d.get("computer_name", "Unknown")
                     ts   = d.get("execution_datetime", "")
                     if name not in devices or ts > devices[name]["last_seen"]:
+                        hw = d.get("hardware_details", {})
+                        # Extract IP from network details or network adapters
+                        ip = ""
+                        for net in d.get("network_details", []):
+                            raw_ip = net.get("ip_address", "")
+                            for ip_part in raw_ip.split(","):
+                                ic = ip_part.strip()
+                                if ic and ic not in ("", "Unknown", "0.0.0.0"):
+                                    ip = ic
+                                    break
+                            if ip:
+                                break
+                        if not ip:
+                            for a in hw.get("network_adapters", []):
+                                aip = a.get("ipv4_address", "") or a.get("ip_address", "")
+                                if aip and aip not in ("", "Unknown", "0.0.0.0"):
+                                    ip = aip
+                                    break
+                        # Extract username from user_accounts
+                        username = ""
+                        for u in d.get("user_accounts", []):
+                            n = (u.get("name") or "").strip()
+                            if n and n.lower() not in ("", "unknown") and u.get("disabled", "False") != "True":
+                                username = n
+                                break
                         devices[name] = {
                             "computer_name": name,
                             "last_seen": ts,
                             "os_name":   d.get("os_name", ""),
+                            "ip":        ip,
+                            "username":  username,
                             "file":      fn,
                         }
                 except Exception:

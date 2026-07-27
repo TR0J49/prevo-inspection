@@ -2101,6 +2101,7 @@
                 <table class="data-table">
                     <thead>
                         <tr>
+                            <th>IP Address</th>
                             <th>Device Name</th>
                             <th>Operating System</th>
                             <th>User</th>
@@ -2109,7 +2110,7 @@
                         </tr>
                     </thead>
                     <tbody id="allDevicesTableBody">
-                        <tr><td colspan="5" style="text-align:center; padding:30px; color:var(--muted);">Loading devices...</td></tr>
+                        <tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted);">Loading devices...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -3413,8 +3414,11 @@ function renderWifiDevices(devices) {
             ? `<span style="font-weight:500;">${esc(osDisplay)}</span>`
             : `<span style="color:var(--muted);">${esc(osDisplay)}</span>`;
             
-        const actionBtn = isAudited 
-            ? `<button class="btn btn-outline btn-sm" onclick="switchTab('software'); setTimeout(()=> {document.getElementById('deviceSelector').value='${esc(d.id || d.computer_name)}'; loadSoftwareForDevice();}, 300)">View Software</button>`
+        const actionBtn = isAudited
+            ? `<div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <button class="btn btn-outline btn-sm" onclick="switchTab('software'); setTimeout(()=> {document.getElementById('deviceSelector').value='${esc(d.id || d.computer_name)}'; loadSoftwareForDevice();}, 300)">View Software</button>
+                <button class="btn btn-primary btn-sm" onclick="openRemoteAuditModal('${esc(d.ip)}')" title="Run audit again on this device">🔄 Re-Audit</button>
+               </div>`
             : `<button class="btn btn-primary btn-sm" onclick="openRemoteAuditModal('${esc(d.ip)}')">Send Notification</button>`;
             
         return `
@@ -3581,21 +3585,21 @@ async function loadAllDevices() {
         const data = await res.json();
         
         if (!data.devices || data.devices.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--muted);">No audited devices found.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted);">No audited devices found.</td></tr>';
             return;
         }
-        
+
         tbody.innerHTML = '';
         data.devices.forEach(d => {
             const tr = document.createElement('tr');
-            
+
             // Format datetime
             let dateStr = d.last_seen || 'Unknown';
             if (dateStr.includes('_')) {
                 const parts = dateStr.split('_');
                 dateStr = `<div style="font-weight:500;">${parts[0]}</div><div style="font-size:11px; color:var(--muted);">${parts[1]}</div>`;
             }
-            
+
             // OS icon
             let osIcon = '💻';
             let osLower = (d.os_name || '').toLowerCase();
@@ -3603,15 +3607,24 @@ async function loadAllDevices() {
             else if (osLower.includes('mac')) osIcon = '🍎';
             else if (osLower.includes('ubuntu') || osLower.includes('linux')) osIcon = '🐧';
 
+            const deviceIp = d.ip || '—';
+            const reAuditBtn = deviceIp && deviceIp !== '—'
+                ? `<button class="btn btn-primary btn-sm" onclick="openRemoteAuditModal('${esc(deviceIp)}')" title="Run audit again">🔄 Re-Audit</button>`
+                : '';
+
             tr.innerHTML = `
+                <td class="td-mono">${esc(deviceIp)}</td>
                 <td style="font-weight:600; color:var(--primary);">${esc(d.computer_name)}</td>
                 <td><div style="display:flex; align-items:center; gap:6px;">${osIcon} ${esc(d.os_name)}</div></td>
-                <td><div class="user-badge">👤 ${esc(d.username)}</div></td>
+                <td><div class="user-badge">👤 ${esc(d.username || '—')}</div></td>
                 <td>${dateStr}</td>
                 <td>
-                    <button class="btn btn-outline btn-sm" onclick="switchTab('software'); setTimeout(() => { document.getElementById('deviceSelector').value = '${esc(d.id || d.computer_name)}'; loadSoftwareForDevice(); }, 100);">
-                        View Audit
-                    </button>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                        <button class="btn btn-outline btn-sm" onclick="switchTab('software'); setTimeout(() => { document.getElementById('deviceSelector').value = '${esc(d.id || d.computer_name)}'; loadSoftwareForDevice(); }, 100);">
+                            View Audit
+                        </button>
+                        ${reAuditBtn}
+                    </div>
                 </td>
             `;
             tbody.appendChild(tr);
