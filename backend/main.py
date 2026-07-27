@@ -1553,6 +1553,111 @@ def get_software_for_device(computer_name: str):
 
 
 # ==============================================================================
+# 8b. DEVICE DIFF — Change Report Card
+# ==============================================================================
+@app.get("/api/device-diff/{computer_name}")
+def get_device_diff(computer_name: str):
+    """Compare the two most recent audits for a device and return a change report."""
+    audits = []
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT audit_json, executed_at
+                        FROM audit_results
+                        WHERE LOWER(computer_name) = LOWER(%s)
+                        ORDER BY created_at DESC
+                        LIMIT 2
+                    """, (computer_name,))
+                    for row in cur.fetchall():
+                        audits.append((row["executed_at"] or "", row["audit_json"] or {}))
+        except Exception as e:
+            logger.error(f"DB device-diff query: {e}")
+
+    # file fallback
+    if not audits and os.path.exists(USER_INFO_DIR):
+        for fn in os.listdir(USER_INFO_DIR):
+            if fn.endswith(".json") and fn.startswith("audit_"):
+                try:
+                    with open(os.path.join(USER_INFO_DIR, fn)) as f:
+                        d = json.load(f)
+                    if d.get("computer_name", "").lower() == computer_name.lower():
+                        audits.append((d.get("execution_datetime", ""), d))
+                except Exception:
+                    pass
+
+    if not audits:
+        return {"has_diff": False, "scan_count": 0, "message": "No audits found for this device."}
+
+    audits.sort(key=lambda x: x[0], reverse=True)
+    scan_count = len(audits)
+
+    if scan_count < 2:
+        return {"has_diff": False, "scan_count": 1, "message": "Only 1 scan available — need at least 2 for a change report."}
+
+    curr_ts, curr = audits[0]
+    prev_ts, prev = audits[1]
+
+    # ── Hardware changes ──
+    hw_changes = []
+    HW_FIELDS = [
+        ("os_name", "OS Name"), ("os_version", "OS Version"), ("architecture", "Architecture"),
+        ("license_status", "License Status"), ("antivirus", "Antivirus"),
+    ]
+    for key, label in HW_FIELDS:
+        old_val = str(prev.get(key, "") or "")
+        new_val = str(curr.get(key, "") or "")
+        if old_val != new_val:
+            hw_changes.append({"field": label, "previous": old_val or "—", "current": new_val or "—"})
+
+    HW_DETAIL_FIELDS = [
+        ("total_ram", "Total RAM"), ("processor_type", "Processor"), ("manufacturer", "Manufacturer"),
+        ("model", "Model"), ("serial_number", "Serial Number"), ("bios_version", "BIOS Version"),
+        ("domain", "Domain"), ("domain_role", "Domain Role"),
+    ]
+    curr_hw = curr.get("hardware_details", {})
+    prev_hw = prev.get("hardware_details", {})
+    for key, label in HW_DETAIL_FIELDS:
+        old_val = str(prev_hw.get(key, "") or "")
+        new_val = str(curr_hw.get(key, "") or "")
+        if old_val != new_val:
+            hw_changes.append({"field": label, "previous": old_val or "—", "current": new_val or "—"})
+
+    # ── Software changes ──
+    def _sw_key(app):
+        return (app.get("name") or "").strip().lower()
+
+    curr_sw = {_sw_key(a): a for a in curr.get("software_inventory", [])}
+    prev_sw = {_sw_key(a): a for a in prev.get("software_inventory", [])}
+
+    newly_installed = []
+    for key, app in curr_sw.items():
+        if key and key not in prev_sw:
+            newly_installed.append({"name": app.get("name", ""), "version": app.get("version", ""), "publisher": app.get("publisher", "")})
+
+    newly_removed = []
+    for key, app in prev_sw.items():
+        if key and key not in curr_sw:
+            newly_removed.append({"name": app.get("name", ""), "version": app.get("version", ""), "publisher": app.get("publisher", "")})
+
+    return {
+        "has_diff": True,
+        "scan_count": scan_count,
+        "previous_scan": prev_ts,
+        "current_scan": curr_ts,
+        "summary": {
+            "installed_count": len(newly_installed),
+            "removed_count": len(newly_removed),
+            "hw_change_count": len(hw_changes),
+        },
+        "hw_changes": hw_changes,
+        "newly_installed": newly_installed,
+        "newly_removed": newly_removed,
+    }
+
+
+# ==============================================================================
 # 9. NETWORK DISCOVERY — PHASE 4
 # ==============================================================================
 @app.post("/discover/network-scan")

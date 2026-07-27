@@ -240,22 +240,32 @@ try {
     }
 } catch {}
 
-# 14. Serial Number, Manufacturer, Model, BIOS, Domain, Asset Tag, Memory, Boot Time
+# 14. Serial Number, Manufacturer, Model, BIOS, Domain, Asset Tag, Memory, Boot Time + Scanner/Site/Org/Location/Online
 Write-Host "Collecting device identity..." -ForegroundColor Cyan
-$serialNumber  = "Unknown"
-$manufacturer  = "Unknown"
-$model         = "Unknown"
-$biosVersion   = "Unknown"
-$biosDate      = "Unknown"
-$assetTag      = "Unknown"
-$domainName    = "Unknown"
-$domainRole    = "Unknown"
-$deviceDesc    = "Unknown"
-$memorySlots   = "Unknown"
-$lastBootTime  = "Unknown"
-$lastBackup    = "Unknown"
-$numProcessors = "Unknown"
-$processorType = "Unknown"
+$serialNumber   = "Unknown"
+$manufacturer   = "Unknown"
+$model          = "Unknown"
+$biosVersion    = "Unknown"
+$biosDate       = "Unknown"
+$assetTag       = "Unknown"
+$domainName     = "Unknown"
+$domainRole     = "Unknown"
+$deviceDesc     = "Unknown"
+$memorySlots    = "Unknown"
+$lastBootTime   = "Unknown"
+$lastBackup     = "Unknown"
+$numProcessors  = "Unknown"
+$processorType  = "Unknown"
+$scannerName    = "Prevoyance Inspection"
+$siteName       = "Unknown"
+$orgName        = "Unknown"
+$deviceLocation = "Unknown"
+$publicIp       = "Unknown"
+$systemStatus   = "Online"
+$uptimeSeconds  = 0
+$uptimeDisplay  = "Unknown"
+$bootTime       = "Unknown"
+$lastShutdown   = "Unknown"
 
 try {
     $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -315,6 +325,64 @@ try {
     if ($shadows) { $lastBackup = $shadows.InstallDate.ToString("yyyy-MM-dd HH:mm:ss") }
 } catch {}
 
+# Scanner Name — always "Prevoyance Inspection" (this tool)
+$scannerName = "Prevoyance Inspection"
+
+# Site — AD site name (Windows domain-joined PCs)
+try {
+    $siteResult = nltest /dsgetsite 2>$null
+    if ($siteResult -and $siteResult.Count -gt 0) {
+        $siteParsed = ($siteResult | Select-Object -First 1).Trim()
+        if ($siteParsed -and $siteParsed -ne "ERROR") { $siteName = $siteParsed }
+    }
+} catch {}
+
+# Organization — from Windows registry
+try {
+    $regOrg = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "RegisteredOrganization" -ErrorAction SilentlyContinue
+    if ($regOrg -and $regOrg.RegisteredOrganization -and $regOrg.RegisteredOrganization.Trim() -ne "") {
+        $orgName = $regOrg.RegisteredOrganization.Trim()
+    }
+} catch {}
+
+# Location — IP geolocation (city, region, country) with timezone fallback
+try {
+    $geoResp = Invoke-RestMethod -Uri "http://ip-api.com/json/?fields=status,city,regionName,country,query" -TimeoutSec 5 -ErrorAction SilentlyContinue
+    if ($geoResp -and $geoResp.status -eq "success") {
+        $parts = @()
+        if ($geoResp.city)       { $parts += $geoResp.city }
+        if ($geoResp.regionName) { $parts += $geoResp.regionName }
+        if ($geoResp.country)    { $parts += $geoResp.country }
+        if ($parts.Count -gt 0) { $deviceLocation = $parts -join ", " }
+        if ($geoResp.query) { $publicIp = $geoResp.query }
+    }
+} catch {}
+if ($deviceLocation -eq "Unknown") {
+    try {
+        $tz = (Get-TimeZone -ErrorAction SilentlyContinue).DisplayName
+        if ($tz) { $deviceLocation = $tz }
+    } catch {}
+}
+
+# System status — the script is running so the system IS online
+$systemStatus = "Online"
+try {
+    $os2 = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($os2 -and $os2.LastBootUpTime) {
+        $bootTime = $os2.LastBootUpTime.ToString('yyyy-MM-dd HH:mm:ss')
+        $uptime   = (Get-Date) - $os2.LastBootUpTime
+        $uptimeSeconds = [int]$uptime.TotalSeconds
+        $uptimeDisplay = "$($uptime.Days)d $($uptime.Hours)h $($uptime.Minutes)m"
+    }
+} catch {}
+# Last shutdown event
+try {
+    $shutdownEvents = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1074} -MaxEvents 1 -ErrorAction SilentlyContinue
+    if ($shutdownEvents) {
+        $lastShutdown = $shutdownEvents[0].TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')
+    }
+} catch {}
+
 # 15. Physical Network Adapters (All 11 Excel fields)
 Write-Host "Collecting network adapter details..." -ForegroundColor Cyan
 $networkAdapters = @()
@@ -346,6 +414,11 @@ try {
             ipv6_addresses = if ($cfg -and $cfg.IPAddress)        { ($cfg.IPAddress | Where-Object { $_ -match ':' }) -join ", " }         else { "Unknown" }
             mtu            = "Unknown"
         }
+        # Get MTU from Get-NetAdapter
+        try {
+            $netA = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceIndex -eq $a.InterfaceIndex } | Select-Object -First 1
+            if ($netA -and $netA.MtuSize) { $networkAdapters[-1].mtu = $netA.MtuSize.ToString() }
+        } catch {}
     }
 } catch {}
 
@@ -436,6 +509,23 @@ try {
             }
         } catch {}
 
+        # Sum free space from all logical disks on this physical drive
+        $totalFree = 0
+        $hasFree = $false
+        try {
+            foreach ($dp in $diskParts) {
+                $logQuery2 = "ASSOCIATORS OF {Win32_DiskPartition.DeviceID='$($dp.DeviceID)'} WHERE AssocClass=Win32_LogicalDiskToPartition"
+                $logDisks2 = Get-CimInstance -Query $logQuery2 -ErrorAction SilentlyContinue
+                foreach ($ld2 in $logDisks2) {
+                    if ($ld2.FreeSpace -and $ld2.FreeSpace -gt 0) {
+                        $totalFree += $ld2.FreeSpace
+                        $hasFree = $true
+                    }
+                }
+            }
+        } catch {}
+        $freeGB = if ($hasFree) { [math]::Round($totalFree / 1GB, 2).ToString() + " GB" } else { "Unknown" }
+
         $diskDetails += @{
             name          = Get-SafeString $d.Name "Unknown"
             interface     = $interface
@@ -445,7 +535,7 @@ try {
             serial_number = Get-SafeString $d.SerialNumber "Unknown"
             firmware      = Get-SafeString $d.FirmwareRevision "Unknown"
             size          = $sizeGB
-            free_space    = "Unknown"
+            free_space    = $freeGB
             is_ssd        = $isSSD
         }
     }
@@ -472,22 +562,65 @@ try {
         if ($app.EstimatedSize -and $app.EstimatedSize -gt 0) {
             $sizeMB = [math]::Round($app.EstimatedSize / 1024, 2).ToString() + " MB"
         }
-        # last_used: try EstimatedLastUsed (rarely populated) or InstallDate as fallback
-        $lastUsed = "Unknown"
-        if ($app.PSObject.Properties["LastUsed"] -and $app.LastUsed) {
-            $lastUsed = [string]$app.LastUsed
-        }
         $softwareInventory += @{
             name         = Get-SafeString $app.DisplayName ""
             version      = Get-SafeString $app.DisplayVersion "Unknown"
             publisher    = Get-SafeString $app.Publisher "Unknown"
             install_date = Get-SafeString $app.InstallDate "Unknown"
             size_mb      = $sizeMB
-            last_used    = $lastUsed
+            last_used    = "Unknown"
+            install_location = Get-SafeString $app.InstallLocation ""
         }
     }
     Write-Host "Found $($softwareInventory.Count) installed applications." -ForegroundColor Green
 } catch {}
+
+# Enrich software "last_used" via Prefetch files + install_location LastWriteTime
+Write-Host "Detecting software last-used times..." -ForegroundColor Cyan
+try {
+    # Build Prefetch lookup: app name -> last modified time of .pf file
+    $prefetchMap = @{}
+    $prefetchDir = "$env:SystemRoot\Prefetch"
+    if (Test-Path $prefetchDir) {
+        Get-ChildItem "$prefetchDir\*.pf" -ErrorAction SilentlyContinue | ForEach-Object {
+            # Prefetch filename format: APPNAME-HASH.pf
+            $pfName = $_.BaseName -replace '-[A-F0-9]{8}$', ''
+            $pfName = $pfName.ToLower()
+            $lastRun = $_.LastWriteTime
+            if (-not $prefetchMap.ContainsKey($pfName) -or $lastRun -gt $prefetchMap[$pfName]) {
+                $prefetchMap[$pfName] = $lastRun
+            }
+        }
+    }
+
+    for ($i = 0; $i -lt $softwareInventory.Count; $i++) {
+        $sw = $softwareInventory[$i]
+        $matched = $false
+
+        # Try matching via Prefetch
+        $swNameClean = ($sw.name -replace '[^a-zA-Z0-9]', '').ToLower()
+        foreach ($pfKey in $prefetchMap.Keys) {
+            $pfClean = $pfKey -replace '[^a-zA-Z0-9]', ''
+            if ($pfClean -and $swNameClean -and ($pfClean -like "*$swNameClean*" -or $swNameClean -like "*$pfClean*")) {
+                $softwareInventory[$i].last_used = $prefetchMap[$pfKey].ToString("yyyy-MM-dd HH:mm:ss")
+                $matched = $true
+                break
+            }
+        }
+
+        # Fallback: check install_location directory LastWriteTime
+        if (-not $matched -and $sw.install_location -and $sw.install_location -ne "" -and (Test-Path $sw.install_location -ErrorAction SilentlyContinue)) {
+            try {
+                $dirInfo = Get-Item $sw.install_location -ErrorAction SilentlyContinue
+                if ($dirInfo -and $dirInfo.LastWriteTime) {
+                    $softwareInventory[$i].last_used = $dirInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+                }
+            } catch {}
+        }
+    }
+} catch {}
+# Remove internal install_location field before JSON output
+foreach ($sw in $softwareInventory) { $sw.Remove("install_location") }
 
 # ────────────────────────────────────────────────────────────────────────────
 #  19. Collect Login History
@@ -581,6 +714,16 @@ $data = @{
         description      = $deviceDesc
         memory_slots     = $memorySlots
         last_backup_time = $lastBackup
+        scanner_name     = $scannerName
+        site             = $siteName
+        organization     = $orgName
+        location         = $deviceLocation
+        public_ip        = $publicIp
+        system_status    = $systemStatus
+        uptime_seconds   = $uptimeSeconds
+        uptime_display   = $uptimeDisplay
+        boot_time        = $bootTime
+        last_shutdown    = $lastShutdown
         gpu_details      = $gpuDetails
         network_adapters = $networkAdapters
         peripherals      = $peripherals

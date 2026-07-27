@@ -169,6 +169,16 @@ PROCESSOR_TYPE="Unknown"
 MEMORY_SLOTS="Unknown"
 LAST_BOOT_TIME="Unknown"
 LAST_BACKUP_TIME="Unknown"
+SCANNER_NAME="Prevoyance Inspection"
+SITE_NAME="Unknown"
+ORG_NAME="Unknown"
+DEVICE_LOCATION="Unknown"
+PUBLIC_IP="Unknown"
+SYSTEM_STATUS="Online"
+UPTIME_SECS_TOTAL=0
+UPTIME_DISPLAY="Unknown"
+BOOT_TIME_STR="Unknown"
+LAST_SHUTDOWN="Unknown"
 
 if [ "$OS_NAME" = "macOS" ]; then
     SERIAL_NUMBER=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Serial Number \(system\)/{print $2}' | head -1 | sed 's/^ *//')
@@ -211,6 +221,73 @@ else
     [ -z "$LAST_BOOT_TIME" ] && LAST_BOOT_TIME=$(uptime -s 2>/dev/null || echo "Unknown")
 fi
 
+# Scanner Name
+SCANNER_NAME="Prevoyance Inspection"
+
+# Site — timezone region
+if [ "$OS_NAME" = "macOS" ]; then
+    SITE_NAME=$(systemsetup -gettimezone 2>/dev/null | awk -F': ' '{print $2}' | tr -d '\n')
+else
+    SITE_NAME=$(timedatectl 2>/dev/null | awk -F': ' '/Time zone/{print $2}' | awk '{print $1}' | tr -d '\n')
+    [ -z "$SITE_NAME" ] && SITE_NAME=$(cat /etc/timezone 2>/dev/null | tr -d '\n')
+fi
+[ -z "$SITE_NAME" ] && SITE_NAME="Unknown"
+
+# Organization — from hostname domain or /etc/organization
+if [ "$OS_NAME" = "macOS" ]; then
+    ORG_NAME=$(defaults read /Library/Preferences/com.apple.RemoteDesktop SystemInformationOrganization 2>/dev/null || echo "")
+    [ -z "$ORG_NAME" ] && ORG_NAME=$(dsconfigad -show 2>/dev/null | awk -F'=' '/Active Directory Forest/{print $2}' | sed 's/^ *//' | tr -d '\n')
+else
+    ORG_NAME=$(hostname -d 2>/dev/null | tr -d '\n')
+fi
+[ -z "$ORG_NAME" ] && ORG_NAME="Unknown"
+
+# Location — IP geolocation (city, region, country) with timezone fallback
+GEO_JSON=$(curl -s --max-time 5 "http://ip-api.com/json/?fields=status,city,regionName,country,query" 2>/dev/null || wget -qO- --timeout=5 "http://ip-api.com/json/?fields=status,city,regionName,country,query" 2>/dev/null)
+if [ -n "$GEO_JSON" ]; then
+    GEO_STATUS=$(echo "$GEO_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',''))" 2>/dev/null)
+    if [ "$GEO_STATUS" = "success" ]; then
+        DEVICE_LOCATION=$(echo "$GEO_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); parts=[d.get('city',''),d.get('regionName',''),d.get('country','')]; print(', '.join(p for p in parts if p))" 2>/dev/null)
+        PUBLIC_IP=$(echo "$GEO_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('query',''))" 2>/dev/null)
+    fi
+fi
+if [ -z "$DEVICE_LOCATION" ] || [ "$DEVICE_LOCATION" = "Unknown" ]; then
+    DEVICE_LOCATION=$(date +"%Z (%z)" 2>/dev/null | tr -d '\n')
+fi
+[ -z "$DEVICE_LOCATION" ] && DEVICE_LOCATION="Unknown"
+
+# System status + uptime
+SYSTEM_STATUS="Online"
+if [ "$OS_NAME" = "macOS" ]; then
+    BOOT_EPOCH=$(sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = //' | sed 's/,.*//')
+    if [ -n "$BOOT_EPOCH" ]; then
+        BOOT_TIME_STR=$(python3 -c "import datetime; print(datetime.datetime.fromtimestamp($BOOT_EPOCH).strftime('%Y-%m-%d %H:%M:%S'))" 2>/dev/null)
+        UPTIME_SECS_TOTAL=$(($(date +%s) - BOOT_EPOCH))
+        UD=$((UPTIME_SECS_TOTAL / 86400))
+        UH=$(( (UPTIME_SECS_TOTAL % 86400) / 3600 ))
+        UM=$(( (UPTIME_SECS_TOTAL % 3600) / 60 ))
+        UPTIME_DISPLAY="${UD}d ${UH}h ${UM}m"
+    fi
+else
+    BOOT_TIME_STR=$(uptime -s 2>/dev/null || who -b 2>/dev/null | awk '{print $3,$4}')
+    if [ -n "$BOOT_TIME_STR" ]; then
+        NOW_EPOCH=$(date +%s)
+        BOOT_EPOCH=$(date -d "$BOOT_TIME_STR" +%s 2>/dev/null)
+        if [ -n "$BOOT_EPOCH" ]; then
+            UPTIME_SECS_TOTAL=$((NOW_EPOCH - BOOT_EPOCH))
+            UD=$((UPTIME_SECS_TOTAL / 86400))
+            UH=$(( (UPTIME_SECS_TOTAL % 86400) / 3600 ))
+            UM=$(( (UPTIME_SECS_TOTAL % 3600) / 60 ))
+            UPTIME_DISPLAY="${UD}d ${UH}h ${UM}m"
+        else
+            UPTIME_DISPLAY=$(uptime -p 2>/dev/null || uptime 2>/dev/null | sed 's/.*up //' | sed 's/,.*//')
+        fi
+    fi
+fi
+# Last shutdown from wtmp
+LAST_SHUTDOWN=$(last -n 1 -x shutdown 2>/dev/null | head -1 | awk '{if(NF>3) print $5" "$6" "$7" "$8}' | tr -d '\n')
+[ -z "$LAST_SHUTDOWN" ] && LAST_SHUTDOWN="Unknown"
+
 SERIAL_NUMBER=$(echo "$SERIAL_NUMBER" | sed 's/"/\\"/g' | tr -d '\n')
 MANUFACTURER=$(echo "$MANUFACTURER"   | sed 's/"/\\"/g' | tr -d '\n')
 MODEL_NAME=$(echo "$MODEL_NAME"       | sed 's/"/\\"/g' | tr -d '\n')
@@ -221,6 +298,14 @@ DOMAIN_NAME=$(echo "$DOMAIN_NAME"     | sed 's/"/\\"/g' | tr -d '\n')
 PROCESSOR_TYPE=$(echo "$PROCESSOR_TYPE" | sed 's/"/\\"/g' | tr -d '\n')
 MEMORY_SLOTS=$(echo "$MEMORY_SLOTS"   | sed 's/"/\\"/g' | tr -d '\n')
 LAST_BOOT_TIME=$(echo "$LAST_BOOT_TIME" | sed 's/"/\\"/g' | tr -d '\n')
+SCANNER_NAME=$(echo "$SCANNER_NAME"   | sed 's/"/\\"/g' | tr -d '\n')
+SITE_NAME=$(echo "$SITE_NAME"         | sed 's/"/\\"/g' | tr -d '\n')
+ORG_NAME=$(echo "$ORG_NAME"           | sed 's/"/\\"/g' | tr -d '\n')
+DEVICE_LOCATION=$(echo "$DEVICE_LOCATION" | sed 's/"/\\"/g' | tr -d '\n')
+PUBLIC_IP=$(echo "$PUBLIC_IP"         | sed 's/"/\\"/g' | tr -d '\n')
+UPTIME_DISPLAY=$(echo "$UPTIME_DISPLAY" | sed 's/"/\\"/g' | tr -d '\n')
+BOOT_TIME_STR=$(echo "$BOOT_TIME_STR" | sed 's/"/\\"/g' | tr -d '\n')
+LAST_SHUTDOWN=$(echo "$LAST_SHUTDOWN" | sed 's/"/\\"/g' | tr -d '\n')
 
 # Physical Network Adapters
 NETWORK_ADAPTERS_JSON="[]"
@@ -259,13 +344,31 @@ try:
                         if 'nameserver[0]' in dl: dns = dl.split(':', 1)[1].strip()
                         if 'domain_name' in dl: dns_domain = dl.split(':', 1)[1].strip()
                 except: pass
+                # Get MTU and subnet mask from ifconfig
+                mtu_val = "Unknown"
+                try:
+                    ifc = subprocess.run(['ifconfig', device], capture_output=True, text=True, timeout=5)
+                    for il in ifc.stdout.splitlines():
+                        if 'mtu' in il.lower():
+                            import re as _re
+                            mm = _re.search(r'mtu\s+(\d+)', il)
+                            if mm: mtu_val = mm.group(1)
+                        if 'netmask' in il.lower() and 'inet ' in il:
+                            mp = il.split()
+                            for idx, w in enumerate(mp):
+                                if w == 'netmask' and idx+1 < len(mp):
+                                    mask = mp[idx+1]
+                        if 'inet6' in il and 'fe80' not in il:
+                            p6 = il.split()
+                            if len(p6) >= 2: ip6 = p6[1].split('%')[0]
+                except: pass
                 adapters.append({
                     "name": port, "description": device,
                     "adapter_type": "Ethernet", "speed": "Unknown",
                     "mac_address": mac, "gateway": gw,
                     "network_mask": mask, "dns_domain": dns_domain,
                     "dns_servers": dns, "dhcp_server": "Unknown",
-                    "ipv4_addresses": ip4, "ipv6_addresses": ip6, "mtu": "Unknown"
+                    "ipv4_addresses": ip4, "ipv6_addresses": ip6, "mtu": mtu_val
                 })
                 port = ""; device = ""
 except Exception as e:
@@ -421,13 +524,21 @@ try:
             size_bytes = info.get('Disk Size', '').split('(')
             size_str = size_bytes[0].strip() if size_bytes else "Unknown"
             is_ssd = "Yes" if info.get('Solid State', '').lower() == 'yes' else "No"
+            # Get free space from df
+            free_str = "Unknown"
+            try:
+                dfr = subprocess.run(['df', '-h', dev], capture_output=True, text=True, timeout=5)
+                for dfl in dfr.stdout.splitlines()[1:]:
+                    dfp = dfl.split()
+                    if len(dfp) >= 4: free_str = dfp[3]; break
+            except: pass
             disks.append({
                 "name": dev, "interface": info.get('Protocol', 'Unknown'),
                 "file_system": info.get('File System Personality', info.get('Content', 'Unknown')),
                 "manufacturer": "Apple", "model": info.get('Device / Media Name', 'Unknown'),
                 "serial_number": info.get('Device Serial Number', 'Unknown'),
-                "firmware": info.get('OS Can Be Installed to Disk', 'Unknown'),
-                "size": size_str, "free_space": "Unknown", "is_ssd": is_ssd
+                "firmware": info.get('Firmware Revision', 'Unknown'),
+                "size": size_str, "free_space": free_str, "is_ssd": is_ssd
             })
         except: pass
 except: pass
@@ -453,6 +564,18 @@ try:
             fstypes = [l.strip() for l in fr.stdout.splitlines() if l.strip()]
             if fstypes: fs = fstypes[0]
         except: pass
+        # Get total free space from partitions of this disk
+        free_total = 0
+        has_free = False
+        try:
+            dfr = subprocess.run(['df', '--output=source,avail', '-B1'], capture_output=True, text=True, timeout=5)
+            for dfl in dfr.stdout.splitlines()[1:]:
+                dfp = dfl.split()
+                if len(dfp) >= 2 and dfp[0].startswith('/dev/' + name):
+                    free_total += int(dfp[1])
+                    has_free = True
+        except: pass
+        free_str = f"{round(free_total/1073741824, 2)} GB" if has_free else "Unknown"
         disks.append({
             "name": '/dev/' + name,
             "interface": d.get('tran', 'Unknown') or "Unknown",
@@ -462,7 +585,7 @@ try:
             "serial_number": d.get('serial', 'Unknown') or "Unknown",
             "firmware": "Unknown",
             "size": d.get('size', 'Unknown'),
-            "free_space": "Unknown",
+            "free_space": free_str,
             "is_ssd": is_ssd
         })
 except Exception as e:
@@ -714,7 +837,7 @@ SOFTWARE_INVENTORY_JSON="[]"
 if command -v python3 >/dev/null 2>&1; then
     if [ "$OS_NAME" = "macOS" ]; then
         SOFTWARE_INVENTORY_JSON=$(python3 - <<'PYEOF'
-import subprocess, json
+import subprocess, json, os, datetime
 try:
     r = subprocess.run(
         ['system_profiler', 'SPApplicationsDataType', '-json'],
@@ -726,13 +849,23 @@ try:
     for a in apps_raw:
         name = a.get('_name', '')
         if name:
+            last_used = 'Unknown'
+            app_path = a.get('path', '')
+            if app_path and os.path.exists(app_path):
+                try:
+                    atime = os.path.getatime(app_path)
+                    last_used = datetime.datetime.fromtimestamp(atime).strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    pass
+            if last_used == 'Unknown':
+                last_used = a.get('lastModified', 'Unknown')
             apps.append({
                 'name': name,
                 'version': a.get('version', 'Unknown'),
                 'publisher': '',
                 'install_date': a.get('lastModified', 'Unknown'),
                 'size_mb': 'Unknown',
-                'last_used': a.get('lastModified', 'Unknown')
+                'last_used': last_used
             })
     print(json.dumps(apps))
 except Exception:
@@ -741,8 +874,20 @@ PYEOF
 )
     else
         SOFTWARE_INVENTORY_JSON=$(python3 - <<'PYEOF'
-import subprocess, json
+import subprocess, json, os, datetime, shutil
 apps = []
+
+def get_last_used(pkg_name):
+    """Try to find last access time of the package's main binary."""
+    binary = shutil.which(pkg_name)
+    if binary:
+        try:
+            atime = os.path.getatime(binary)
+            return datetime.datetime.fromtimestamp(atime).strftime('%Y-%m-%d %H:%M:%S')
+        except:
+            pass
+    return 'Unknown'
+
 try:
     r = subprocess.run(
         ['dpkg-query', '-W', '--showformat=${Package}|${Version}|${Installed-Size}\n'],
@@ -754,7 +899,8 @@ try:
             size_kb = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 0
             size_str = f"{round(size_kb/1024,2)} MB" if size_kb > 0 else "Unknown"
             apps.append({'name': parts[0].strip(), 'version': parts[1].strip(),
-                         'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str, 'last_used': 'Unknown'})
+                         'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str,
+                         'last_used': get_last_used(parts[0].strip())})
     if apps:
         print(json.dumps(apps))
         exit()
@@ -771,7 +917,8 @@ try:
             size_b = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 0
             size_str = f"{round(size_b/1048576,2)} MB" if size_b > 0 else "Unknown"
             apps.append({'name': parts[0].strip(), 'version': parts[1].strip(),
-                         'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str, 'last_used': 'Unknown'})
+                         'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str,
+                         'last_used': get_last_used(parts[0].strip())})
 except:
     pass
 print(json.dumps(apps))
@@ -931,6 +1078,16 @@ JSON=$(cat <<EOF
         "description": "$DEVICE_DESC",
         "memory_slots": "$MEMORY_SLOTS",
         "last_backup_time": "$LAST_BACKUP_TIME",
+        "scanner_name": "$SCANNER_NAME",
+        "site": "$SITE_NAME",
+        "organization": "$ORG_NAME",
+        "location": "$DEVICE_LOCATION",
+        "public_ip": "$PUBLIC_IP",
+        "system_status": "$SYSTEM_STATUS",
+        "uptime_seconds": $UPTIME_SECS_TOTAL,
+        "uptime_display": "$UPTIME_DISPLAY",
+        "boot_time": "$BOOT_TIME_STR",
+        "last_shutdown": "$LAST_SHUTDOWN",
         "gpu_details": $GPU_JSON,
         "network_adapters": $NETWORK_ADAPTERS_JSON,
         "peripherals": $PERIPHERALS_JSON,

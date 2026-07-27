@@ -507,6 +507,7 @@
             animation: spin 0.7s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pulse-dot { 0%,100%{ opacity:1; box-shadow:0 0 0 0 rgba(34,197,94,0.5); } 50%{ opacity:0.8; box-shadow:0 0 0 6px rgba(34,197,94,0); } }
 
         /* ═══════════════════════════════════════════════════════════════════
            CODE BLOCKS
@@ -1104,8 +1105,18 @@
                     </div>
                     <div class="form-grid" style="grid-template-columns:1fr 1fr;">
                         <div class="form-group">
-                            <label for="assetWarranty">Warranty Expiry</label>
+                            <label for="assetWarrantyStart">Warranty Start Date</label>
+                            <input type="date" id="assetWarrantyStart" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label for="assetWarranty">Warranty End Date</label>
                             <input type="date" id="assetWarranty" class="input-field">
+                        </div>
+                    </div>
+                    <div class="form-grid" style="grid-template-columns:1fr 1fr;">
+                        <div class="form-group">
+                            <label for="assetWarrantyProvider">Warranty Provider</label>
+                            <input type="text" id="assetWarrantyProvider" class="input-field" placeholder="e.g. Dell ProSupport">
                         </div>
                         <div class="form-group">
                             <label for="assetLifecycle">Life Cycle Stage</label>
@@ -1119,8 +1130,22 @@
                         </div>
                     </div>
                     <div class="form-group">
-                        <label for="assetVendor">Vendor / Supplier</label>
+                        <label for="assetWarrantyNotes">Warranty Notes</label>
+                        <input type="text" id="assetWarrantyNotes" class="input-field" placeholder="e.g. Extended warranty, on-site support">
+                    </div>
+                    <div class="form-group">
+                        <label for="assetVendor">Vendor</label>
                         <input type="text" id="assetVendor" class="input-field" placeholder="e.g. Dell India, HP, Lenovo">
+                    </div>
+                    <div class="form-grid" style="grid-template-columns:1fr 1fr;">
+                        <div class="form-group">
+                            <label for="assetSupplier">Supplier</label>
+                            <input type="text" id="assetSupplier" class="input-field" placeholder="e.g. Ingram Micro, Redington">
+                        </div>
+                        <div class="form-group">
+                            <label for="assetPoNumber">PO Number</label>
+                            <input type="text" id="assetPoNumber" class="input-field" placeholder="e.g. PO-2024-001234">
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="assetNotes">Notes</label>
@@ -1293,7 +1318,7 @@
 
         <!-- Software & Hardware Panel -->
         <div id="softwarePanel" style="display:none;">
-            <!-- System Specifications Card -->
+            <!-- Device Header Card -->
             <div class="card" style="margin-bottom:24px; border-top: 4px solid var(--primary);">
                 <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 20px;">
                     <div>
@@ -1307,94 +1332,467 @@
                         <span class="badge badge-green" id="swLicenseStatus">Licensed</span>
                     </div>
                 </div>
-                
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; background: #f8fafc; padding: 20px; border-radius: 8px;">
-                    <div>
-                        <div style="color:var(--muted); font-size: 12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Operating System</div>
-                        <div id="specOs" style="font-size:14px; font-weight:500; color:var(--text-1);">—</div>
-                        <div id="specOsVer" style="font-size:13px; color:var(--text-2); margin-top:2px;">—</div>
-                    </div>
-                    <div>
-                        <div style="color:var(--muted); font-size: 12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Processor (CPU)</div>
-                        <div id="specCpu" style="font-size:14px; font-weight:500; color:var(--text-1);">—</div>
-                    </div>
-                    <div>
-                        <div style="color:var(--muted); font-size: 12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Memory (RAM)</div>
-                        <div id="specRam" style="font-size:14px; font-weight:500; color:var(--text-1);">—</div>
-                    </div>
-                    <div>
-                        <div style="color:var(--muted); font-size: 12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Storage Drives</div>
-                        <div id="specDisk" style="font-size:14px; font-weight:500; color:var(--text-1);">—</div>
-                    </div>
-                    <div>
-                        <div style="color:var(--muted); font-size: 12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Manufacturer / Model</div>
-                        <div id="specModel" style="font-size:14px; font-weight:500; color:var(--text-1);">—</div>
-                        <div id="specSerial" style="font-size:13px; color:var(--text-2); margin-top:2px;">—</div>
-                    </div>
-                    <div>
-                        <div style="color:var(--muted); font-size: 12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Security & Antivirus</div>
-                        <div id="specAv" style="font-size:14px; font-weight:500; color:var(--text-1);">—</div>
+
+                <!-- Sub-tabs for device detail sections -->
+                <div style="display:flex; gap:4px; flex-wrap:wrap; border-bottom:2px solid #e2e8f0; padding-bottom:0; margin-bottom:0;">
+                    <button class="btn btn-sm" id="dtab-overview" onclick="switchDeviceTab('overview')" style="border-radius:8px 8px 0 0; border-bottom:3px solid var(--primary); font-weight:600;">Overview</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-hardware" onclick="switchDeviceTab('hardware')" style="border-radius:8px 8px 0 0;">Hardware</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-storage" onclick="switchDeviceTab('storage')" style="border-radius:8px 8px 0 0;">Storage</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-network" onclick="switchDeviceTab('network')" style="border-radius:8px 8px 0 0;">Network</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-peripherals" onclick="switchDeviceTab('peripherals')" style="border-radius:8px 8px 0 0;">Peripherals</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-gpu" onclick="switchDeviceTab('gpu')" style="border-radius:8px 8px 0 0;">Video/GPU</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-users" onclick="switchDeviceTab('users')" style="border-radius:8px 8px 0 0;">Users</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-logins" onclick="switchDeviceTab('logins')" style="border-radius:8px 8px 0 0;">Logins</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-software" onclick="switchDeviceTab('software')" style="border-radius:8px 8px 0 0;">Software</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-lifecycle" onclick="switchDeviceTab('lifecycle')" style="border-radius:8px 8px 0 0;">Lifecycle</button>
+                </div>
+            </div>
+
+            <!-- TAB: Overview -->
+            <div id="dpanel-overview" class="device-tab-panel">
+                <div class="card" style="margin-bottom:24px;">
+                    <div class="card-title" style="margin-bottom:16px;">Device Overview</div>
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; background: #f8fafc; padding: 20px; border-radius: 8px;">
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Scanner Name</div>
+                            <div id="specScannerName" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Site</div>
+                            <div id="specSite" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Organization</div>
+                            <div id="specOrg" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Device Name</div>
+                            <div id="specDeviceName" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Description</div>
+                            <div id="specDescription" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Operating System</div>
+                            <div id="specOs" style="font-size:14px; font-weight:500;">—</div>
+                            <div id="specOsVer" style="font-size:13px; color:var(--text-2); margin-top:2px;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Manufacturer / Model</div>
+                            <div id="specModel" style="font-size:14px; font-weight:500;">—</div>
+                            <div id="specSerial" style="font-size:13px; color:var(--text-2); margin-top:2px;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Domain</div>
+                            <div id="specDomain" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Domain Role</div>
+                            <div id="specDomainRole" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Location</div>
+                            <div id="specLocation" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Public IP</div>
+                            <div id="specPublicIp" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Asset Tag</div>
+                            <div id="specAssetTag" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Last Boot Time</div>
+                            <div id="specLastBoot" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">System Status</div>
+                            <div id="specSystemStatus" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Uptime</div>
+                            <div id="specUptime" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Last Shutdown</div>
+                            <div id="specLastShutdown" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Last Backup</div>
+                            <div id="specLastBackup" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Last Login</div>
+                            <div id="specLastLogin" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Security & Antivirus</div>
+                            <div id="specAv" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Last Scan</div>
+                            <div id="specLastScan" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">License Status</div>
+                            <div id="specLicenseVal" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Login History Card -->
-            <div class="card" style="margin-bottom:24px; border-top: 4px solid var(--info);">
-                <div class="card-title" style="margin-bottom:16px;">Recent Logins</div>
-                <div class="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>User</th>
-                                <th>Domain</th>
-                                <th>Logon Type</th>
-                                <th>Timestamp</th>
-                            </tr>
-                        </thead>
-                        <tbody id="loginHistoryBody">
-                            <tr><td colspan="5" style="text-align:center; color:var(--muted);">No login history available</td></tr>
-                        </tbody>
-                    </table>
+            <!-- TAB: Hardware -->
+            <div id="dpanel-hardware" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div class="card-title" style="margin-bottom:16px;">Hardware Details</div>
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; background: #f8fafc; padding: 20px; border-radius: 8px;">
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Processor (CPU)</div>
+                            <div id="specCpu" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Number of Processors</div>
+                            <div id="specNumProc" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Processor Type</div>
+                            <div id="specProcType" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Memory (RAM)</div>
+                            <div id="specRam" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Memory Slots</div>
+                            <div id="specMemSlots" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Total Storage</div>
+                            <div id="specDisk" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">BIOS Version</div>
+                            <div id="specBiosVer" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">BIOS Date</div>
+                            <div id="specBiosDate" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Software Inventory Card -->
-            <div class="card" style="margin-bottom:24px;">
-                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
-                    <div>
-                        <div class="card-title">Software Inventory</div>
-                    </div>
-                    <div style="display:flex; gap:10px;">
-                        <span class="badge badge-blue" id="swTotalBadge">0 apps</span>
-                        <button class="btn btn-outline btn-sm" onclick="exportSoftwareCSV()">📤 Export CSV</button>
+            <!-- TAB: Storage -->
+            <div id="dpanel-storage" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div class="card-title" style="margin-bottom:16px;">Disk Information</div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Name</th>
+                                    <th>Manufacturer</th>
+                                    <th>Model</th>
+                                    <th>Serial Number</th>
+                                    <th>Interface</th>
+                                    <th>File System</th>
+                                    <th>Size</th>
+                                    <th>Free Space</th>
+                                    <th>SSD</th>
+                                    <th>Firmware</th>
+                                </tr>
+                            </thead>
+                            <tbody id="diskDetailsBody">
+                                <tr><td colspan="11" style="text-align:center; color:var(--muted);">No disk data available</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-
-                <div class="search-wrap" style="margin-bottom:16px;">
-                    <span class="search-icon">🔍</span>
-                    <input type="text" class="input-field search-input" id="swSearch"
-                        placeholder="Search by name, publisher, version…"
-                        oninput="filterSoftware()">
-                </div>
-
-                <div class="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Application Name</th>
-                                <th>Version</th>
-                                <th>Publisher</th>
-                                <th>Install Date</th>
-                                <th>Size</th>
-                            </tr>
-                        </thead>
-                        <tbody id="swTableBody">
-                        </tbody>
-                    </table>
+                <div class="card" style="margin-bottom:24px;">
+                    <div class="card-title" style="margin-bottom:16px;">Disk Partitions</div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Name</th>
+                                    <th>Total Size</th>
+                                    <th>Free Space</th>
+                                    <th>File System</th>
+                                    <th>Bootable</th>
+                                </tr>
+                            </thead>
+                            <tbody id="diskPartitionsBody">
+                                <tr><td colspan="6" style="text-align:center; color:var(--muted);">No partition data available</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
+
+            <!-- TAB: Network -->
+            <div id="dpanel-network" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div class="card-title" style="margin-bottom:16px;">Network Adapters</div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Name</th>
+                                    <th>Description</th>
+                                    <th>MAC Address</th>
+                                    <th>IPv4</th>
+                                    <th>IPv6</th>
+                                    <th>Subnet Mask</th>
+                                    <th>Gateway</th>
+                                    <th>DNS Domain</th>
+                                    <th>DNS Servers</th>
+                                    <th>DHCP Server</th>
+                                    <th>MTU</th>
+                                    <th>Speed</th>
+                                    <th>Type</th>
+                                </tr>
+                            </thead>
+                            <tbody id="networkAdaptersBody">
+                                <tr><td colspan="14" style="text-align:center; color:var(--muted);">No network adapter data available</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: Peripherals -->
+            <div id="dpanel-peripherals" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div class="card-title" style="margin-bottom:16px;">Connected Peripherals</div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Type</th>
+                                    <th>Name</th>
+                                    <th>Description</th>
+                                    <th>Manufacturer</th>
+                                    <th>Version</th>
+                                </tr>
+                            </thead>
+                            <tbody id="peripheralsBody">
+                                <tr><td colspan="6" style="text-align:center; color:var(--muted);">No peripheral data available</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: GPU / Video Controllers -->
+            <div id="dpanel-gpu" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div class="card-title" style="margin-bottom:16px;">Video Controllers / GPU</div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Device Name</th>
+                                    <th>Adapter Name</th>
+                                    <th>Video Processor</th>
+                                    <th>Driver Version</th>
+                                </tr>
+                            </thead>
+                            <tbody id="gpuDetailsBody">
+                                <tr><td colspan="5" style="text-align:center; color:var(--muted);">No GPU data available</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: Users -->
+            <div id="dpanel-users" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div class="card-title" style="margin-bottom:16px;">User Accounts</div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Username</th>
+                                    <th>Home Directory</th>
+                                    <th>Last Login</th>
+                                    <th>Licensed</th>
+                                    <th>Login Count</th>
+                                    <th>User Type</th>
+                                    <th>Current User</th>
+                                </tr>
+                            </thead>
+                            <tbody id="userAccountsBody">
+                                <tr><td colspan="8" style="text-align:center; color:var(--muted);">No user account data available</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: Logins -->
+            <div id="dpanel-logins" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px; border-top: 4px solid var(--info);">
+                    <div class="card-title" style="margin-bottom:16px;">Recent Logins</div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>User</th>
+                                    <th>Domain</th>
+                                    <th>Logon Type</th>
+                                    <th>Timestamp</th>
+                                </tr>
+                            </thead>
+                            <tbody id="loginHistoryBody">
+                                <tr><td colspan="5" style="text-align:center; color:var(--muted);">No login history available</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: Lifecycle (Manual fields from Excel) -->
+            <div id="dpanel-lifecycle" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                        <div class="card-title">Lifecycle & Asset Management</div>
+                        <button class="btn btn-primary btn-sm" id="lifecycleSaveBtn" onclick="saveDeviceLifecycle()">💾 Save</button>
+                    </div>
+                    <div id="lifecycleStatus" style="display:none; margin-bottom:12px;"></div>
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px;">
+                        <div class="form-group">
+                            <label>Location / Branch</label>
+                            <input type="text" id="lcLocation" class="input-field" placeholder="e.g. Mumbai HQ, Floor 3">
+                        </div>
+                        <div class="form-group">
+                            <label>Owner / Assignee</label>
+                            <input type="text" id="lcOwner" class="input-field" placeholder="Full name">
+                        </div>
+                        <div class="form-group">
+                            <label>Department</label>
+                            <input type="text" id="lcDept" class="input-field" placeholder="e.g. Finance, IT">
+                        </div>
+                        <div class="form-group">
+                            <label>Status</label>
+                            <select id="lcStatus" class="input-field">
+                                <option value="Active">🟢 Active</option>
+                                <option value="Maintenance">🟡 Maintenance</option>
+                                <option value="EOL">🟠 End of Life</option>
+                                <option value="Retired">🔴 Retired</option>
+                                <option value="Decommissioned">⚫ Decommissioned</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Vendor</label>
+                            <input type="text" id="lcVendor" class="input-field" placeholder="e.g. Dell, HP, Lenovo">
+                        </div>
+                        <div class="form-group">
+                            <label>Supplier</label>
+                            <input type="text" id="lcSupplier" class="input-field" placeholder="e.g. Ingram Micro">
+                        </div>
+                        <div class="form-group">
+                            <label>Purchase Date</label>
+                            <input type="date" id="lcPurchaseDate" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label>Purchase Price</label>
+                            <input type="text" id="lcPrice" class="input-field" placeholder="e.g. 45000">
+                        </div>
+                        <div class="form-group">
+                            <label>PO Number</label>
+                            <input type="text" id="lcPoNumber" class="input-field" placeholder="e.g. PO-2024-001234">
+                        </div>
+                        <div class="form-group">
+                            <label>Warranty Start Date</label>
+                            <input type="date" id="lcWarrantyStart" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label>Warranty End Date</label>
+                            <input type="date" id="lcWarrantyEnd" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label>Warranty Provider</label>
+                            <input type="text" id="lcWarrantyProvider" class="input-field" placeholder="e.g. Dell ProSupport">
+                        </div>
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label>Warranty Notes</label>
+                            <input type="text" id="lcWarrantyNotes" class="input-field" placeholder="e.g. Extended warranty, on-site support">
+                        </div>
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label>Notes</label>
+                            <textarea id="lcNotes" class="input-field" rows="2" placeholder="Additional remarks..."></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: Software -->
+            <div id="dpanel-software" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+                        <div>
+                            <div class="card-title">Software Inventory</div>
+                        </div>
+                        <div style="display:flex; gap:10px;">
+                            <span class="badge badge-blue" id="swTotalBadge">0 apps</span>
+                            <button class="btn btn-outline btn-sm" onclick="exportSoftwareCSV()">📤 Export CSV</button>
+                        </div>
+                    </div>
+
+                    <div class="search-wrap" style="margin-bottom:16px;">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" class="input-field search-input" id="swSearch"
+                            placeholder="Search by name, publisher, version…"
+                            oninput="filterSoftware()">
+                    </div>
+
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Application Name</th>
+                                    <th>Version</th>
+                                    <th>Publisher</th>
+                                    <th>Install Date</th>
+                                    <th>Size</th>
+                                    <th>Last Used</th>
+                                </tr>
+                            </thead>
+                            <tbody id="swTableBody">
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div id="swPagination" style="display:none; margin-top:16px; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+                        <div style="font-size:13px; color:var(--muted);" id="swPageInfo">Showing 1-25 of 100</div>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <button class="btn btn-outline btn-sm" id="swPrevBtn" onclick="swChangePage(-1)">← Prev</button>
+                            <div id="swPageNumbers" style="display:flex; gap:4px;"></div>
+                            <button class="btn btn-outline btn-sm" id="swNextBtn" onclick="swChangePage(1)">Next →</button>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:6px; font-size:13px;">
+                            <label style="color:var(--muted);">Per page:</label>
+                            <select id="swPerPage" class="input-field" style="width:70px; padding:4px 8px; font-size:13px;" onchange="swChangePerPage()">
+                                <option value="25">25</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                                <option value="0">All</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
 
             <!-- Change Report Card (Progressive Diff) -->
             <div class="card" id="changeReportCard" style="margin-bottom:24px; border-top: 4px solid #f59e0b;">
@@ -1468,6 +1866,7 @@
                     </div>
 
                 </div>
+            </div>
             </div>
 
         </div>
@@ -1631,14 +2030,14 @@
     <!-- ─────────────────────────────────────────────────────────────
          REMOTE AUDIT MODAL
     ───────────────────────────────────────────────────────────────── -->
-    <div id="remoteAuditModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:9999; align-items:center; justify-content:center;">
-        <div class="card" style="width:100%; max-width:450px; padding:24px; position:relative;">
-            <button onclick="closeRemoteAuditModal()" style="position:absolute; right:16px; top:16px; background:none; border:none; font-size:18px; cursor:pointer; color:var(--muted);">&times;</button>
-            <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px;">
+    <div id="remoteAuditModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:9999; align-items:center; justify-content:center; padding:20px; overflow-y:auto;">
+        <div class="card" style="width:100%; max-width:460px; padding:24px; position:relative; max-height:calc(100vh - 40px); overflow-y:auto;">
+            <button onclick="closeRemoteAuditModal()" style="position:absolute; right:16px; top:16px; background:none; border:none; font-size:18px; line-height:1; cursor:pointer; color:var(--muted);">&times;</button>
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px; padding-right:28px;">
                 <div class="card-icon green">⚡</div>
-                <div>
+                <div style="min-width:0;">
                     <h3 style="margin:0; font-size:16px; font-weight:600;">Send Notification</h3>
-                    <p style="margin:0; font-size:13px; color:var(--muted);" id="remoteAuditTarget">Target: </p>
+                    <p style="margin:0; font-size:13px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="remoteAuditTarget">Target: </p>
                 </div>
             </div>
 
@@ -1671,10 +2070,10 @@
 
                 <div id="remoteAuditStatus" style="display:none; font-size:13px; padding:10px; border-radius:6px;"></div>
 
-                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px;">
-                    <button class="btn btn-outline" onclick="copyAuditCommand()" style="margin-right:auto;">📋 Copy Manual Command</button>
-                    <button class="btn btn-outline" onclick="closeRemoteAuditModal()">Cancel</button>
-                    <button class="btn btn-primary" id="btnSubmitRemoteAudit" onclick="submitRemoteAudit()">▶ Send Notification</button>
+                <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:4px; padding-top:16px; border-top:1px solid var(--border);">
+                    <button class="btn btn-outline" onclick="copyAuditCommand()" style="flex:1 1 100%;">📋 Copy Manual Command</button>
+                    <button class="btn btn-outline" onclick="closeRemoteAuditModal()" style="flex:1 1 120px;">Cancel</button>
+                    <button class="btn btn-primary" id="btnSubmitRemoteAudit" onclick="submitRemoteAudit()" style="flex:2 1 180px;">▶ Send Notification</button>
                 </div>
             </div>
         </div>
@@ -1932,7 +2331,7 @@ function renderAssetsTable(assets) {
                 <span style="font-size:11px; color:var(--muted);">${esc(a.department || '')}</span></td>
             <td>${esc(a.location || '—')}</td>
             <td>${esc(a.vendor || '—')}</td>
-            <td>${lcBadge[a.life_cycle_stage] || `<span class="badge badge-gray">${esc(a.life_cycle_stage)}</span>`}</td>
+            <td>${lcBadge[a.status || a.life_cycle_stage] || `<span class="badge badge-gray">${esc(a.status || a.life_cycle_stage || '—')}</span>`}</td>
             <td>${warrantyHtml}</td>
             <td>
                 <div style="display:flex; gap:6px;">
@@ -1963,17 +2362,22 @@ async function saveAsset() {
         return;
     }
     const payload = {
-        device_id:        deviceId,
-        asset_tag:        document.getElementById('assetTag').value.trim(),
-        owner:            document.getElementById('assetOwner').value.trim(),
-        department:       document.getElementById('assetDept').value.trim(),
-        location:         document.getElementById('assetLocation').value.trim(),
-        purchase_date:    document.getElementById('assetPurchaseDate').value,
-        purchase_price:   document.getElementById('assetPrice').value.trim(),
-        warranty_expiry:  document.getElementById('assetWarranty').value,
-        life_cycle_stage: document.getElementById('assetLifecycle').value,
-        vendor:           document.getElementById('assetVendor').value.trim(),
-        notes:            document.getElementById('assetNotes').value.trim(),
+        device_id:          deviceId,
+        asset_tag:          document.getElementById('assetTag').value.trim(),
+        owner:              document.getElementById('assetOwner').value.trim(),
+        department:         document.getElementById('assetDept').value.trim(),
+        location:           document.getElementById('assetLocation').value.trim(),
+        purchase_date:      document.getElementById('assetPurchaseDate').value,
+        purchase_price:     document.getElementById('assetPrice').value.trim(),
+        warranty_start_date:document.getElementById('assetWarrantyStart').value,
+        warranty_expiry:    document.getElementById('assetWarranty').value,
+        warranty_provider:  document.getElementById('assetWarrantyProvider').value.trim(),
+        warranty_notes:     document.getElementById('assetWarrantyNotes').value.trim(),
+        status:             document.getElementById('assetLifecycle').value,
+        vendor:             document.getElementById('assetVendor').value.trim(),
+        supplier:           document.getElementById('assetSupplier').value.trim(),
+        po_number:          document.getElementById('assetPoNumber').value.trim(),
+        notes:              document.getElementById('assetNotes').value.trim(),
     };
     const btn    = document.getElementById('saveAssetBtn');
     btn.disabled = true;
@@ -2004,17 +2408,22 @@ async function editAsset(deviceId) {
         const r = await fetch(`/asset-metadata/${encodeURIComponent(deviceId)}`);
         if (!r.ok) return;
         const a = await r.json();
-        document.getElementById('assetDeviceId').value    = a.device_id || '';
-        document.getElementById('assetTag').value         = a.asset_tag || '';
-        document.getElementById('assetOwner').value       = a.owner || '';
-        document.getElementById('assetDept').value        = a.department || '';
-        document.getElementById('assetLocation').value    = a.location || '';
-        document.getElementById('assetPurchaseDate').value= a.purchase_date || '';
-        document.getElementById('assetPrice').value       = a.purchase_price || '';
-        document.getElementById('assetWarranty').value    = a.warranty_expiry || '';
-        document.getElementById('assetLifecycle').value   = a.life_cycle_stage || 'Active';
-        document.getElementById('assetVendor').value      = a.vendor || '';
-        document.getElementById('assetNotes').value       = a.notes || '';
+        document.getElementById('assetDeviceId').value       = a.device_id || '';
+        document.getElementById('assetTag').value            = a.asset_tag || '';
+        document.getElementById('assetOwner').value          = a.owner || '';
+        document.getElementById('assetDept').value           = a.department || '';
+        document.getElementById('assetLocation').value       = a.location || '';
+        document.getElementById('assetPurchaseDate').value   = a.purchase_date || '';
+        document.getElementById('assetPrice').value          = a.purchase_price || '';
+        document.getElementById('assetWarrantyStart').value  = a.warranty_start_date || '';
+        document.getElementById('assetWarranty').value       = a.warranty_expiry || '';
+        document.getElementById('assetWarrantyProvider').value= a.warranty_provider || '';
+        document.getElementById('assetWarrantyNotes').value  = a.warranty_notes || '';
+        document.getElementById('assetLifecycle').value      = a.status || a.life_cycle_stage || 'Active';
+        document.getElementById('assetVendor').value         = a.vendor || '';
+        document.getElementById('assetSupplier').value       = a.supplier || '';
+        document.getElementById('assetPoNumber').value       = a.po_number || '';
+        document.getElementById('assetNotes').value          = a.notes || '';
         document.getElementById('assetFormTitle').textContent = 'Edit Asset';
         document.getElementById('assetDeviceId').focus();
     } catch(e) { console.error(e); }
@@ -2030,7 +2439,9 @@ async function deleteAsset(deviceId) {
 
 function clearAssetForm() {
     ['assetDeviceId','assetTag','assetOwner','assetDept','assetLocation',
-     'assetPurchaseDate','assetPrice','assetWarranty','assetVendor','assetNotes'].forEach(id => {
+     'assetPurchaseDate','assetPrice','assetWarrantyStart','assetWarranty',
+     'assetWarrantyProvider','assetWarrantyNotes','assetVendor','assetSupplier',
+     'assetPoNumber','assetNotes'].forEach(id => {
         document.getElementById(id).value = '';
     });
     document.getElementById('assetLifecycle').value = 'Active';
@@ -2175,18 +2586,188 @@ async function loadSoftwareForDevice() {
         document.getElementById('swLicenseStatus').textContent = data.license_status || 'Unknown License';
         document.getElementById('swTotalBadge').textContent  = `${data.total} apps`;
         
-        // Populate Specs
+        // Populate all device detail tabs
         const hw = data.hardware_details || {};
+
+        // --- Overview tab ---
+        document.getElementById('specScannerName').textContent = hw.scanner_name || 'Prevoyance Inspection';
+        document.getElementById('specSite').textContent = hw.site || '—';
+        document.getElementById('specOrg').textContent = hw.organization || '—';
+        document.getElementById('specDeviceName').textContent = name;
+        document.getElementById('specDescription').textContent = hw.description || '—';
         document.getElementById('specOs').textContent = data.os_name || '—';
         document.getElementById('specOsVer').textContent = data.os_version ? `Build ${data.os_version}` : '—';
-        document.getElementById('specCpu').textContent = hw.cpu || '—';
-        document.getElementById('specRam').textContent = hw.ram || '—';
-        document.getElementById('specDisk').textContent = hw.disk || '—';
         document.getElementById('specModel').textContent = (hw.manufacturer && hw.model) ? `${hw.manufacturer} ${hw.model}` : '—';
         document.getElementById('specSerial').textContent = hw.serial_number ? `S/N: ${hw.serial_number}` : '—';
-        document.getElementById('specAv').textContent = data.antivirus || '—';
+        document.getElementById('specDomain').textContent = hw.domain || '—';
+        document.getElementById('specDomainRole').textContent = hw.domain_role || '—';
+        document.getElementById('specLocation').textContent = hw.location || '—';
+        document.getElementById('specPublicIp').textContent = hw.public_ip || '—';
+        document.getElementById('specAssetTag').textContent = hw.asset_tag || '—';
+        document.getElementById('specLastBoot').textContent = hw.last_boot_time || '—';
+        // System status badge
+        const statusEl = document.getElementById('specSystemStatus');
+        const isOnline = (hw.system_status || '').toLowerCase() === 'online';
+        // Consider online if audit was within last 24 hours
+        const auditTime = data.last_audit || '';
+        let recentAudit = false;
+        if (auditTime) {
+            const auditDate = new Date(auditTime);
+            recentAudit = (Date.now() - auditDate.getTime()) < 24 * 60 * 60 * 1000;
+        }
+        const showOnline = isOnline && recentAudit;
+        statusEl.innerHTML = showOnline
+            ? '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:50%;background:#22c55e;display:inline-block;animation:pulse-dot 1.5s infinite;"></span><span style="color:#16a34a;font-weight:600;">Active</span></span>'
+            : isOnline
+                ? '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block;"></span><span style="color:#d97706;font-weight:600;">Last seen ' + (auditTime || 'unknown') + '</span></span>'
+                : '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block;"></span><span style="color:#dc2626;font-weight:600;">Inactive</span></span>';
 
-        // Populate Login History
+        // Uptime display
+        const uptimeEl = document.getElementById('specUptime');
+        if (hw.uptime_display && hw.uptime_display !== 'Unknown') {
+            uptimeEl.innerHTML = '<span style="font-weight:600;">' + esc(hw.uptime_display) + '</span>' +
+                (hw.boot_time && hw.boot_time !== 'Unknown' ? '<span style="color:var(--muted);font-size:12px;margin-left:8px;">(since ' + esc(hw.boot_time) + ')</span>' : '');
+        } else {
+            uptimeEl.textContent = hw.boot_time && hw.boot_time !== 'Unknown' ? 'Boot: ' + hw.boot_time : '—';
+        }
+
+        // Last shutdown
+        document.getElementById('specLastShutdown').textContent = hw.last_shutdown && hw.last_shutdown !== 'Unknown' ? hw.last_shutdown : (hw.offline_time || '—');
+        document.getElementById('specLastBackup').textContent = hw.last_backup_time || '—';
+        // Last login from login_history
+        const loginHist = data.login_history || [];
+        if (loginHist.length > 0) {
+            const latest = loginHist[0];
+            document.getElementById('specLastLogin').innerHTML =
+                '<b>' + esc(latest.username || '') + '</b> <span style="color:var(--muted);font-size:12px;">— ' + esc(latest.time || '') + '</span>';
+        } else {
+            document.getElementById('specLastLogin').textContent = '—';
+        }
+        document.getElementById('specAv').textContent = data.antivirus || '—';
+        document.getElementById('specLastScan').textContent = data.last_audit || '—';
+        document.getElementById('specLicenseVal').textContent = data.license_status || '—';
+
+        // --- Hardware tab ---
+        document.getElementById('specCpu').textContent = hw.cpu || '—';
+        document.getElementById('specNumProc').textContent = hw.num_processors || '—';
+        document.getElementById('specProcType').textContent = hw.processor_type || '—';
+        document.getElementById('specRam').textContent = hw.ram || '—';
+        document.getElementById('specMemSlots').textContent = hw.memory_slots || '—';
+        document.getElementById('specDisk').textContent = hw.disk || '—';
+        document.getElementById('specBiosVer').textContent = hw.bios_version || '—';
+        document.getElementById('specBiosDate').textContent = hw.bios_date || '—';
+
+        // --- Storage tab: Disk Details (Excel: Disk Information) ---
+        const disks = hw.disk_details || [];
+        const diskBody = document.getElementById('diskDetailsBody');
+        if (disks.length) {
+            diskBody.innerHTML = disks.map((d, i) => `<tr>
+                <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
+                <td>${esc(d.name || d.device_id || '—')}</td>
+                <td>${esc(d.manufacturer || '—')}</td>
+                <td>${esc(d.model || '—')}</td>
+                <td style="font-size:12px;">${esc(d.serial_number || '—')}</td>
+                <td>${esc(d.interface || d.interface_type || '—')}</td>
+                <td>${esc(d.file_system || '—')}</td>
+                <td>${esc(d.size || '—')}</td>
+                <td>${esc(d.free_space || '—')}</td>
+                <td><span class="badge badge-${(d.is_ssd||'')=='Yes'?'green':'orange'}">${esc(d.is_ssd || '—')}</span></td>
+                <td style="font-size:12px;">${esc(d.firmware || d.firmware_revision || '—')}</td>
+            </tr>`).join('');
+        } else {
+            diskBody.innerHTML = '<tr><td colspan="11" style="text-align:center; color:var(--muted);">No disk data available</td></tr>';
+        }
+
+        // --- Storage tab: Partitions ---
+        const parts = hw.disk_partitions || [];
+        const partBody = document.getElementById('diskPartitionsBody');
+        if (parts.length) {
+            partBody.innerHTML = parts.map((p, i) => `<tr>
+                <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
+                <td>${esc(p.drive_letter || p.mount_point || p.name || '—')}</td>
+                <td>${esc(p.size_gb || p.size || '—')}</td>
+                <td>${esc(p.free_space || '—')}</td>
+                <td>${esc(p.file_system || '—')}</td>
+                <td>${esc(p.bootable || '—')}</td>
+            </tr>`).join('');
+        } else {
+            partBody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--muted);">No partition data available</td></tr>';
+        }
+
+        // --- Network tab (Excel: all 11 Network Adaptor fields) ---
+        const adapters = hw.network_adapters || data.network_details || [];
+        const netBody = document.getElementById('networkAdaptersBody');
+        if (adapters.length) {
+            netBody.innerHTML = adapters.map((n, i) => `<tr>
+                <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
+                <td>${esc(n.name || n.adapter_name || '—')}</td>
+                <td style="font-size:12px;">${esc(n.description || '—')}</td>
+                <td class="td-mono" style="font-size:12px;">${esc(n.mac_address || '—')}</td>
+                <td class="td-mono">${esc(n.ipv4_addresses || n.ip_address || '—')}</td>
+                <td class="td-mono" style="font-size:11px;">${esc(n.ipv6_addresses || '—')}</td>
+                <td class="td-mono">${esc(n.network_mask || n.subnet_mask || '—')}</td>
+                <td class="td-mono">${esc(n.gateway || n.default_gateway || '—')}</td>
+                <td style="font-size:12px;">${esc(n.dns_domain || '—')}</td>
+                <td style="font-size:12px;">${esc(n.dns_servers || '—')}</td>
+                <td>${esc(n.dhcp_server || n.dhcp_enabled || '—')}</td>
+                <td>${esc(n.mtu || '—')}</td>
+                <td>${esc(n.speed || '—')}</td>
+                <td>${esc(n.adapter_type || n.type || '—')}</td>
+            </tr>`).join('');
+        } else {
+            netBody.innerHTML = '<tr><td colspan="14" style="text-align:center; color:var(--muted);">No network adapter data available</td></tr>';
+        }
+
+        // --- Peripherals tab (Excel: type, name, description, manufacturer, version) ---
+        const periph = hw.peripherals || [];
+        const periphBody = document.getElementById('peripheralsBody');
+        if (periph.length) {
+            periphBody.innerHTML = periph.map((p, i) => `<tr>
+                <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
+                <td><span class="badge badge-blue">${esc(p.type || '—')}</span></td>
+                <td>${esc(p.name || '—')}</td>
+                <td>${esc(p.description || '—')}</td>
+                <td>${esc(p.manufacturer || '—')}</td>
+                <td>${esc(p.version || '—')}</td>
+            </tr>`).join('');
+        } else {
+            periphBody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--muted);">No peripheral data available</td></tr>';
+        }
+
+        // --- GPU tab ---
+        const gpus = hw.gpu_details || [];
+        const gpuBody = document.getElementById('gpuDetailsBody');
+        if (gpus.length) {
+            gpuBody.innerHTML = gpus.map((g, i) => `<tr>
+                <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
+                <td>${esc(g.device_name || '—')}</td>
+                <td>${esc(g.name || '—')}</td>
+                <td>${esc(g.video_processor || '—')}</td>
+                <td class="td-mono" style="font-size:12px;">${esc(g.driver_version || g.drivers || '—')}</td>
+            </tr>`).join('');
+        } else {
+            gpuBody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--muted);">No GPU data available</td></tr>';
+        }
+
+        // --- Users tab ---
+        const users = data.user_accounts || [];
+        const usersBody = document.getElementById('userAccountsBody');
+        if (users.length) {
+            usersBody.innerHTML = users.map((u, i) => `<tr>
+                <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
+                <td><b>${esc(u.name || u.username || '—')}</b></td>
+                <td style="font-size:12px;">${esc(u.home_directory || '—')}</td>
+                <td>${esc(u.last_login || '—')}</td>
+                <td>${u.licensed ? '<span class="badge badge-green">Yes</span>' : '<span class="badge badge-orange">No</span>'}</td>
+                <td>${esc(u.num_logins != null ? String(u.num_logins) : '—')}</td>
+                <td><span class="badge badge-${(u.user_type||'').toLowerCase()==='admin'?'purple':'blue'}">${esc(u.user_type || '—')}</span></td>
+                <td>${u.is_current ? '<span class="badge badge-green">Yes</span>' : '—'}</td>
+            </tr>`).join('');
+        } else {
+            usersBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--muted);">No user account data available</td></tr>';
+        }
+
+        // --- Logins tab ---
         const logins = data.login_history || [];
         const loginTbody = document.getElementById('loginHistoryBody');
         if (logins.length === 0) {
@@ -2205,8 +2786,9 @@ async function loadSoftwareForDevice() {
 
         document.getElementById('swEmpty').style.display     = 'none';
         document.getElementById('softwarePanel').style.display = 'block';
+        switchDeviceTab('overview');  // show overview tab by default
         renderSoftwareTable(swData);
-        loadChangeReport(name);   // ← progressive diff
+        loadChangeReport(name);   // progressive diff
     } catch(e) {
         alert('Failed to load software inventory. Run a compliance audit first.');
         console.error(e);
@@ -2301,26 +2883,197 @@ async function loadChangeReport(deviceName) {
     }
 }
 
+function switchDeviceTab(tab) {
+    const tabs = ['overview','hardware','storage','network','peripherals','gpu','users','logins','software','lifecycle'];
+    tabs.forEach(t => {
+        const panel = document.getElementById('dpanel-' + t);
+        const btn   = document.getElementById('dtab-' + t);
+        if (panel) panel.style.display = (t === tab) ? 'block' : 'none';
+        if (btn) {
+            if (t === tab) {
+                btn.className = 'btn btn-sm';
+                btn.style.borderBottom = '3px solid var(--primary)';
+                btn.style.fontWeight = '600';
+            } else {
+                btn.className = 'btn btn-sm btn-outline';
+                btn.style.borderBottom = 'none';
+                btn.style.fontWeight = '400';
+            }
+        }
+    });
+    if (tab === 'lifecycle') loadDeviceLifecycle();
+}
+
+async function loadDeviceLifecycle() {
+    const deviceId = document.getElementById('deviceSelector').value;
+    if (!deviceId) return;
+    try {
+        const r = await fetch(`/asset-metadata/${encodeURIComponent(deviceId)}`);
+        if (r.ok) {
+            const a = await r.json();
+            document.getElementById('lcLocation').value        = a.location || '';
+            document.getElementById('lcOwner').value           = a.owner || '';
+            document.getElementById('lcDept').value            = a.department || '';
+            document.getElementById('lcStatus').value          = a.status || 'Active';
+            document.getElementById('lcVendor').value          = a.vendor || '';
+            document.getElementById('lcSupplier').value        = a.supplier || '';
+            document.getElementById('lcPurchaseDate').value    = a.purchase_date || '';
+            document.getElementById('lcPrice').value           = a.purchase_price || '';
+            document.getElementById('lcPoNumber').value        = a.po_number || '';
+            document.getElementById('lcWarrantyStart').value   = a.warranty_start_date || '';
+            document.getElementById('lcWarrantyEnd').value     = a.warranty_expiry || '';
+            document.getElementById('lcWarrantyProvider').value= a.warranty_provider || '';
+            document.getElementById('lcWarrantyNotes').value   = a.warranty_notes || '';
+            document.getElementById('lcNotes').value           = a.notes || '';
+        } else {
+            // No lifecycle data yet — clear fields
+            ['lcLocation','lcOwner','lcDept','lcVendor','lcSupplier','lcPurchaseDate',
+             'lcPrice','lcPoNumber','lcWarrantyStart','lcWarrantyEnd','lcWarrantyProvider',
+             'lcWarrantyNotes','lcNotes'].forEach(id => { document.getElementById(id).value = ''; });
+            document.getElementById('lcStatus').value = 'Active';
+        }
+    } catch(e) { console.error('Lifecycle load error:', e); }
+}
+
+async function saveDeviceLifecycle() {
+    const deviceId = document.getElementById('deviceSelector').value;
+    if (!deviceId) return;
+    const payload = {
+        device_id:          deviceId,
+        location:           document.getElementById('lcLocation').value.trim(),
+        owner:              document.getElementById('lcOwner').value.trim(),
+        department:         document.getElementById('lcDept').value.trim(),
+        status:             document.getElementById('lcStatus').value,
+        vendor:             document.getElementById('lcVendor').value.trim(),
+        supplier:           document.getElementById('lcSupplier').value.trim(),
+        purchase_date:      document.getElementById('lcPurchaseDate').value,
+        purchase_price:     document.getElementById('lcPrice').value.trim(),
+        po_number:          document.getElementById('lcPoNumber').value.trim(),
+        warranty_start_date:document.getElementById('lcWarrantyStart').value,
+        warranty_expiry:    document.getElementById('lcWarrantyEnd').value,
+        warranty_provider:  document.getElementById('lcWarrantyProvider').value.trim(),
+        warranty_notes:     document.getElementById('lcWarrantyNotes').value.trim(),
+        notes:              document.getElementById('lcNotes').value.trim(),
+    };
+    const btn = document.getElementById('lifecycleSaveBtn');
+    btn.disabled = true; btn.textContent = 'Saving...';
+    const statusEl = document.getElementById('lifecycleStatus');
+    try {
+        const r = await fetch('/asset-metadata', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        if (r.ok) {
+            statusEl.style.display = 'block';
+            statusEl.className = 'alert alert-success';
+            statusEl.textContent = 'Lifecycle data saved successfully!';
+        } else {
+            statusEl.style.display = 'block';
+            statusEl.className = 'alert alert-danger';
+            statusEl.textContent = 'Save failed. Please try again.';
+        }
+    } catch(e) {
+        statusEl.style.display = 'block';
+        statusEl.className = 'alert alert-danger';
+        statusEl.textContent = 'Network error.';
+    } finally {
+        btn.disabled = false; btn.innerHTML = '💾 Save';
+        setTimeout(() => { statusEl.style.display = 'none'; }, 4000);
+    }
+}
+
+// ── Software pagination state ──
+let swFilteredData = [];
+let swCurrentPage  = 1;
+let swPerPage      = 25;
+
 function renderSoftwareTable(apps) {
+    swFilteredData = apps;
+    swCurrentPage  = 1;
+    swRenderPage();
+}
+
+function swRenderPage() {
     const tbody = document.getElementById('swTableBody');
+    const pag   = document.getElementById('swPagination');
+    const apps  = swFilteredData;
+
     if (!apps.length) {
-        tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
+        tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
             <div class="empty-icon">📭</div>
             <h3>No software data</h3>
             <p>Run a compliance audit scan on this device to populate software inventory.</p>
         </div></td></tr>`;
+        pag.style.display = 'none';
         return;
     }
-    tbody.innerHTML = apps.map((sw, i) => `
+
+    const total     = apps.length;
+    const perPage   = swPerPage === 0 ? total : swPerPage;
+    const pageCount = Math.ceil(total / perPage);
+    if (swCurrentPage > pageCount) swCurrentPage = pageCount;
+    if (swCurrentPage < 1) swCurrentPage = 1;
+    const start = (swCurrentPage - 1) * perPage;
+    const end   = Math.min(start + perPage, total);
+    const page  = apps.slice(start, end);
+
+    tbody.innerHTML = page.map((sw, i) => `
         <tr>
-            <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
+            <td style="color:var(--muted-lt); font-size:12px;">${start + i + 1}</td>
             <td><b>${esc(sw.name || '—')}</b></td>
             <td class="td-mono" style="color:var(--info);">${esc(sw.version || '—')}</td>
             <td style="color:var(--text-2);">${esc(sw.publisher || '—')}</td>
             <td style="color:var(--muted);">${esc(sw.install_date || '—')}</td>
             <td style="color:var(--muted);">${esc(sw.size_mb || '—')}</td>
+            <td style="color:var(--muted);">${esc(sw.last_used || '—')}</td>
         </tr>
     `).join('');
+
+    // Pagination controls
+    if (pageCount <= 1 && swPerPage !== 0) {
+        pag.style.display = 'none';
+        document.getElementById('swPageInfo').textContent = `${total} apps`;
+        return;
+    }
+    pag.style.display = 'flex';
+    document.getElementById('swPageInfo').textContent = `Showing ${start+1}–${end} of ${total}`;
+    document.getElementById('swPrevBtn').disabled = swCurrentPage <= 1;
+    document.getElementById('swNextBtn').disabled = swCurrentPage >= pageCount;
+
+    // Page number buttons (show max 7 around current)
+    const numDiv = document.getElementById('swPageNumbers');
+    let pages = [];
+    if (pageCount <= 7) {
+        for (let p = 1; p <= pageCount; p++) pages.push(p);
+    } else {
+        pages.push(1);
+        let lo = Math.max(2, swCurrentPage - 2);
+        let hi = Math.min(pageCount - 1, swCurrentPage + 2);
+        if (lo > 2) pages.push('...');
+        for (let p = lo; p <= hi; p++) pages.push(p);
+        if (hi < pageCount - 1) pages.push('...');
+        pages.push(pageCount);
+    }
+    numDiv.innerHTML = pages.map(p => {
+        if (p === '...') return `<span style="color:var(--muted); padding:4px;">…</span>`;
+        const active = p === swCurrentPage;
+        return `<button class="btn btn-sm ${active ? '' : 'btn-outline'}" style="min-width:32px; padding:4px 8px; ${active ? 'font-weight:700;' : ''}" onclick="swGoToPage(${p})">${p}</button>`;
+    }).join('');
+}
+
+function swChangePage(dir) {
+    swCurrentPage += dir;
+    swRenderPage();
+}
+function swGoToPage(p) {
+    swCurrentPage = p;
+    swRenderPage();
+}
+function swChangePerPage() {
+    swPerPage = parseInt(document.getElementById('swPerPage').value);
+    swCurrentPage = 1;
+    swRenderPage();
 }
 
 function filterSoftware() {
@@ -2330,13 +3083,15 @@ function filterSoftware() {
         (sw.publisher || '').toLowerCase().includes(q) ||
         (sw.version   || '').toLowerCase().includes(q)
     );
-    renderSoftwareTable(filtered);
+    swFilteredData = filtered;
+    swCurrentPage = 1;
+    swRenderPage();
 }
 
 function exportSoftwareCSV() {
     if (!swData.length) return;
-    const rows = [['Name','Version','Publisher','Install Date','Size']];
-    swData.forEach(sw => rows.push([sw.name, sw.version, sw.publisher, sw.install_date, sw.size_mb]));
+    const rows = [['Name','Version','Publisher','Install Date','Size','Last Used']];
+    swData.forEach(sw => rows.push([sw.name, sw.version, sw.publisher, sw.install_date, sw.size_mb, sw.last_used || '']));
     const device = document.getElementById('deviceSelector').value || 'device';
     downloadCSV(rows, `software_${device}.csv`);
 }
