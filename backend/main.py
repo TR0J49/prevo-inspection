@@ -6,10 +6,11 @@
 import base64
 import uuid
 from fastapi import FastAPI, Query, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, PlainTextResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, validator, ValidationError
+from pydantic import BaseModel, field_validator, ValidationError, ConfigDict
 from typing import List, Union, Optional
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
 from reportlab.lib import colors
@@ -66,7 +67,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AuditBackend")
 
-app = FastAPI(title="NSDL IT Asset Management Portal", version="3.0.0")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    # Startup
+    _init_db()
+    _load_wifi_passwords()
+    lan_ip = _get_lan_ip()
+    _open_firewall_port(8000)
+    logger.info("=" * 54)
+    logger.info("  Infrapulse - NSDL IT Asset Management Portal")
+    logger.info("=" * 54)
+    logger.info(f"  Local   : http://localhost:8000")
+    logger.info(f"  Network : http://{lan_ip}:8000")
+    db_status = f"PostgreSQL \"{PG_DATABASE}\" @ {PG_HOST}" if _db_ok() else "File storage (no DB)"
+    logger.info(f"  Storage : {db_status}")
+    logger.info("  Share the Network URL with client workstations")
+    logger.info("-" * 54)
+    logger.info("  macOS : right-click .command -> Open, or run:")
+    logger.info("    bash verify_system_<id>.command")
+    logger.info("  Linux : run with:")
+    logger.info("    bash verify_system_<id>.sh")
+    logger.info("=" * 54)
+    yield
+    # Shutdown (nothing needed)
+
+app = FastAPI(title="NSDL IT Asset Management Portal", version="3.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -78,7 +105,6 @@ app.add_middleware(
 
 sessions = {}
 
-from fastapi.exceptions import RequestValidationError
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.error(f"Validation error on {request.url.path}: {exc.errors()}")
@@ -329,29 +355,6 @@ def _open_firewall_port(port: int = 8000):
         logger.info(f"Firewall rule already exists for port {port}")
 
 
-@app.on_event("startup")
-async def _startup():
-    # 1. PostgreSQL
-    _init_db()
-    # 2. WiFi passwords (from DB if connected, else from file)
-    _load_wifi_passwords()
-    # 3. Print network info
-    lan_ip = _get_lan_ip()
-    _open_firewall_port(8000)
-    logger.info("=" * 54)
-    logger.info("  Infrapulse - NSDL IT Asset Management Portal")
-    logger.info("=" * 54)
-    logger.info(f"  Local   : http://localhost:8000")
-    logger.info(f"  Network : http://{lan_ip}:8000")
-    db_status = f"PostgreSQL \"{PG_DATABASE}\" @ {PG_HOST}" if _db_ok() else "File storage (no DB)"
-    logger.info(f"  Storage : {db_status}")
-    logger.info("  Share the Network URL with client workstations")
-    logger.info("-" * 54)
-    logger.info("  macOS : right-click .command -> Open, or run:")
-    logger.info("    bash verify_system_<id>.command")
-    logger.info("  Linux : run with:")
-    logger.info("    bash verify_system_<id>.sh")
-    logger.info("=" * 54)
 
 
 CONSENT_TEXT = (
@@ -384,7 +387,17 @@ def model_to_dict(model):
 # 2. PYDANTIC MODELS
 # ==============================================================================
 
-class GpuInfo(BaseModel):
+class _CleanBase(BaseModel):
+    """Base model that normalizes all string fields and allows extra fields."""
+    model_config = ConfigDict(extra="allow")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def normalize(cls, v):
+        return clean_string(v, "Unknown")
+
+
+class GpuInfo(_CleanBase):
     # Excel: Video Controllers
     name: str = "Unknown"
     device_name: str = "Unknown"       # Excel: device name
@@ -392,12 +405,8 @@ class GpuInfo(BaseModel):
     driver_version: str = "Unknown"    # Excel: drivers
     vram: str = "Unknown"
 
-    @validator("*", pre=True, allow_reuse=True)
-    def normalize(cls, v):
-        return clean_string(v, "Unknown")
 
-
-class NetworkAdapter(BaseModel):
+class NetworkAdapter(_CleanBase):
     # Excel: Network Adaptors (all 11 fields)
     name: str = "Unknown"
     description: str = "Unknown"       # Excel: description
@@ -413,12 +422,8 @@ class NetworkAdapter(BaseModel):
     ipv6_addresses: str = "Unknown"    # Excel: IPv6 addresses
     mtu: str = "Unknown"               # Excel: MTU
 
-    @validator("*", pre=True, allow_reuse=True)
-    def normalize(cls, v):
-        return clean_string(v, "Unknown")
 
-
-class Peripheral(BaseModel):
+class Peripheral(_CleanBase):
     # Excel: Peripherals (all 5 fields)
     name: str = "Unknown"
     type: str = "Unknown"
@@ -426,12 +431,8 @@ class Peripheral(BaseModel):
     manufacturer: str = "Unknown"      # Excel: manufacturer
     version: str = "Unknown"           # Excel: version (was 'status')
 
-    @validator("*", pre=True, allow_reuse=True)
-    def normalize(cls, v):
-        return clean_string(v, "Unknown")
 
-
-class DiskPartition(BaseModel):
+class DiskPartition(_CleanBase):
     # Excel: Partitions (all 5 fields)
     name: str = "Unknown"
     type: str = "Unknown"
@@ -440,12 +441,8 @@ class DiskPartition(BaseModel):
     bootable: str = "Unknown"
     file_system: str = "Unknown"       # Excel: file system type
 
-    @validator("*", pre=True, allow_reuse=True)
-    def normalize(cls, v):
-        return clean_string(v, "Unknown")
 
-
-class DiskInfo(BaseModel):
+class DiskInfo(_CleanBase):
     # Excel: Disk Information (all 10 fields)
     name: str = "Unknown"
     interface: str = "Unknown"         # Excel: interface (SATA/NVMe/USB)
@@ -458,12 +455,10 @@ class DiskInfo(BaseModel):
     free_space: str = "Unknown"        # Excel: free space
     is_ssd: str = "Unknown"            # Excel: whether it's solid state
 
-    @validator("*", pre=True, allow_reuse=True)
-    def normalize(cls, v):
-        return clean_string(v, "Unknown")
-
 
 class HardwareDetails(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     # Excel: Device Data — hardware fields
     cpu: str = "Unknown"
     ram: str = "Unknown"
@@ -501,19 +496,21 @@ class HardwareDetails(BaseModel):
     disk_partitions: List[Union[DiskPartition, dict]] = []
     disk_details: List[Union[DiskInfo, dict]] = []  # Excel: Disk Information
 
-    @validator(
+    @field_validator(
         "cpu", "ram", "disk", "serial_number", "manufacturer", "model",
         "num_processors", "processor_type", "bios_version", "bios_date",
         "asset_tag", "last_boot_time", "domain", "domain_role", "description",
         "memory_slots", "last_backup_time",
         "scanner_name", "site", "organization", "location", "public_ip",
         "system_status", "uptime_display", "boot_time", "last_shutdown",
-        pre=True, always=True, allow_reuse=True
+        mode="before"
     )
+    @classmethod
     def normalize_str(cls, v):
         return clean_string(v, "Unknown")
 
-    @validator("gpu_details", "network_adapters", "peripherals", "disk_partitions", "disk_details", pre=True, always=True, allow_reuse=True)
+    @field_validator("gpu_details", "network_adapters", "peripherals", "disk_partitions", "disk_details", mode="before")
+    @classmethod
     def coerce_list(cls, v):
         if v is None:
             return []
@@ -522,17 +519,13 @@ class HardwareDetails(BaseModel):
         return [v]
 
 
-class NetworkDetails(BaseModel):
+class NetworkDetails(_CleanBase):
     ip_address: str = "Unknown"
     gateway: str = "Unknown"
     mac: str = "Unknown"
 
-    @validator("*", pre=True, allow_reuse=True)
-    def normalize(cls, v):
-        return clean_string(v, "Unknown")
 
-
-class UserAccount(BaseModel):
+class UserAccount(_CleanBase):
     # Excel: Users (all 7 fields)
     name: str = "Unknown"
     disabled: str = "Unknown"
@@ -542,36 +535,36 @@ class UserAccount(BaseModel):
     user_type: str = "Unknown"         # Excel: user type (Local/Domain/Admin)
     is_current: str = "False"          # Excel: current user
 
-    @validator("*", pre=True, allow_reuse=True)
-    def normalize(cls, v):
-        return clean_string(v, "Unknown")
-
 
 class HotfixData(BaseModel):
+    model_config = ConfigDict(extra="allow")
     caption: str = ""
     cs_name: str = ""
     description: str = ""
     fix_id: str = ""
     installed_on: str = ""
 
-    @validator("*", pre=True, allow_reuse=True)
+    @field_validator("*", mode="before")
+    @classmethod
     def normalize(cls, v):
         return clean_string(v, "")
 
 
 class PrinterData(BaseModel):
+    model_config = ConfigDict(extra="allow")
     name: str = ""
     system_name: str = ""
     enable_bidi: str = ""
     extended_printer_status: str = ""
     port_name: str = ""
 
-    @validator("*", pre=True, allow_reuse=True)
+    @field_validator("*", mode="before")
+    @classmethod
     def normalize(cls, v):
         return clean_string(v, "")
 
 
-class SoftwareEntry(BaseModel):
+class SoftwareEntry(_CleanBase):
     # Excel: Software Assets (all 8 fields — last 3 are calculated server-side)
     name: str = ""
     version: str = "Unknown"
@@ -580,12 +573,10 @@ class SoftwareEntry(BaseModel):
     size_mb: str = "Unknown"
     last_used: str = "Unknown"         # Excel: Last Used
 
-    @validator("*", pre=True, allow_reuse=True)
-    def normalize(cls, v):
-        return clean_string(v, "Unknown")
-
 
 class AuditData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     execution_datetime: str = ""
     consent: str = CONSENT_TEXT
     computer_name: str = "Unknown"
@@ -605,23 +596,26 @@ class AuditData(BaseModel):
     software_inventory: List[Union[SoftwareEntry, dict]] = []
     login_history: List[dict] = []
 
-    @validator(
+    @field_validator(
         "execution_datetime", "consent", "computer_name", "os_name",
         "os_version", "architecture", "license_status", "mac_address",
-        pre=True, always=True, allow_reuse=True,
+        mode="before"
     )
+    @classmethod
     def normalize_required(cls, v):
         return clean_string(v, "Unknown")
 
-    @validator("drive_name", pre=True, always=True, allow_reuse=True)
+    @field_validator("drive_name", mode="before")
+    @classmethod
     def normalize_drive(cls, v):
         return clean_string(v, "No CD Unit Found")
 
-    @validator(
+    @field_validator(
         "antivirus", "compression_utilities", "hotfixes",
         "printers", "network_details", "user_accounts", "software_inventory",
-        pre=True, always=True, allow_reuse=True,
+        mode="before"
     )
+    @classmethod
     def coerce_list(cls, v):
         if v is None:
             return []
@@ -853,7 +847,7 @@ async def upload_audit(request: Request, client_id: str = Query(None)):
     except ValidationError as e:
         logger.warning(f"Pydantic validation failed, accepting raw JSON. Errors: {e.errors()}")
         # Create a minimal AuditData with defaults for missing/invalid fields
-        data = AuditData.construct(**raw_json)
+        data = AuditData.model_construct(**raw_json)
     cid = client_id or "unknown"
     logger.info(f"Uploading audit for client: {cid}")
 
