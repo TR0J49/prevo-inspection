@@ -477,6 +477,17 @@ class HardwareDetails(BaseModel):
     description: str = "Unknown"       # Excel: description
     memory_slots: str = "Unknown"      # Excel: memory slot count, current size, max size
     last_backup_time: str = "Unknown"  # Excel: last backup time
+    # Auto-discovered fields
+    scanner_name: str = "Unknown"
+    site: str = "Unknown"
+    organization: str = "Unknown"
+    location: str = "Unknown"
+    public_ip: str = "Unknown"
+    system_status: str = "Unknown"
+    uptime_seconds: Union[int, str] = 0
+    uptime_display: str = "Unknown"
+    boot_time: str = "Unknown"
+    last_shutdown: str = "Unknown"
     # Nested lists
     gpu_details: List[Union[GpuInfo, dict]] = []
     network_adapters: List[Union[NetworkAdapter, dict]] = []
@@ -489,6 +500,8 @@ class HardwareDetails(BaseModel):
         "num_processors", "processor_type", "bios_version", "bios_date",
         "asset_tag", "last_boot_time", "domain", "domain_role", "description",
         "memory_slots", "last_backup_time",
+        "scanner_name", "site", "organization", "location", "public_ip",
+        "system_status", "uptime_display", "boot_time", "last_shutdown",
         pre=True, always=True, allow_reuse=True
     )
     def normalize_str(cls, v):
