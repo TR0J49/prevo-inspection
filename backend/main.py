@@ -16,6 +16,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import letter
 from xml.sax.saxutils import escape
+from contextlib import contextmanager
 import os
 import json
 import xml.etree.ElementTree as ET
@@ -29,6 +30,22 @@ import tempfile
 import time
 import re
 import platform
+
+# PostgreSQL
+try:
+    import psycopg2
+    from psycopg2.pool import ThreadedConnectionPool
+    from psycopg2.extras import Json as PgJson, RealDictCursor
+    _PG_AVAILABLE = True
+except ImportError:
+    _PG_AVAILABLE = False
+
+# Load .env
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # ── Base Directory & Paths ───────────────────────────────────────────────────
 BASE_DIR           = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,12 +78,180 @@ app.add_middleware(
 
 sessions = {}
 
-# ── WiFi password store (persisted across restarts) ───────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+#  PostgreSQL — connection pool + table bootstrap
+# ──────────────────────────────────────────────────────────────────────────────
+PG_HOST     = os.getenv("PG_HOST",     "localhost")
+PG_PORT     = int(os.getenv("PG_PORT", "5432"))
+PG_USER     = os.getenv("PG_USER",     "postgres")
+PG_PASSWORD = os.getenv("PG_PASSWORD", "shubham9284")
+PG_DATABASE = os.getenv("PG_DATABASE", "AI audit")
+
+_db_pool = None   # ThreadedConnectionPool instance, None if unavailable
+
+def _init_db():
+    global _db_pool
+    if not _PG_AVAILABLE:
+        logger.warning("psycopg2 not installed — running without PostgreSQL.")
+        return
+    try:
+        _db_pool = ThreadedConnectionPool(
+            minconn=1, maxconn=10,
+            host=PG_HOST, port=PG_PORT,
+            user=PG_USER, password=PG_PASSWORD,
+            dbname=PG_DATABASE,
+        )
+        with _db_ctx() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        client_id      TEXT PRIMARY KEY,
+                        status         TEXT        DEFAULT 'pending',
+                        branch_name    TEXT,
+                        branch_code    TEXT,
+                        officer_name   TEXT,
+                        available_pcs  TEXT        DEFAULT '1',
+                        registered_pcs TEXT        DEFAULT '1',
+                        pdf_path       TEXT,
+                        xml_path       TEXT,
+                        error          TEXT,
+                        created_at     TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at     TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    CREATE TABLE IF NOT EXISTS audit_results (
+                        id             SERIAL PRIMARY KEY,
+                        client_id      TEXT,
+                        computer_name  TEXT,
+                        audit_json     JSONB,
+                        json_path      TEXT,
+                        pdf_path       TEXT,
+                        xml_path       TEXT,
+                        executed_at    TEXT,
+                        created_at     TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    CREATE TABLE IF NOT EXISTS asset_metadata (
+                        device_id      TEXT PRIMARY KEY,
+                        data           JSONB        NOT NULL,
+                        updated_at     TIMESTAMPTZ  DEFAULT NOW()
+                    );
+                    CREATE TABLE IF NOT EXISTS wifi_passwords (
+                        ssid           TEXT PRIMARY KEY,
+                        password       TEXT        NOT NULL,
+                        updated_at     TIMESTAMPTZ DEFAULT NOW()
+                    );
+                """)
+        logger.info(f"PostgreSQL connected -> \"{PG_DATABASE}\" @ {PG_HOST}:{PG_PORT}")
+    except Exception as e:
+        logger.error(f"PostgreSQL init failed: {e}  (falling back to file storage)")
+        _db_pool = None
+
+
+def _db_ok() -> bool:
+    return _db_pool is not None
+
+
+@contextmanager
+def _db_ctx():
+    """Yield a connection from the pool; commit on success, rollback on error."""
+    conn = _db_pool.getconn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        _db_pool.putconn(conn)
+
+
+# ── Session helpers (DB-backed with in-memory fallback) ───────────────────────
+def _session_get(client_id: str) -> dict:
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT * FROM sessions WHERE client_id = %s", (client_id,))
+                    row = cur.fetchone()
+                    if row:
+                        return dict(row)
+        except Exception as e:
+            logger.error(f"DB session_get: {e}")
+    return sessions.get(client_id, {"status": "pending"})
+
+
+def _session_set(client_id: str, data: dict):
+    sessions[client_id] = data          # keep in-memory mirror
+    if not _db_ok():
+        return
+    try:
+        with _db_ctx() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO sessions
+                        (client_id, status, branch_name, branch_code, officer_name,
+                         available_pcs, registered_pcs, pdf_path, xml_path, error)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (client_id) DO UPDATE SET
+                        status         = EXCLUDED.status,
+                        branch_name    = EXCLUDED.branch_name,
+                        branch_code    = EXCLUDED.branch_code,
+                        officer_name   = EXCLUDED.officer_name,
+                        available_pcs  = EXCLUDED.available_pcs,
+                        registered_pcs = EXCLUDED.registered_pcs,
+                        pdf_path       = EXCLUDED.pdf_path,
+                        xml_path       = EXCLUDED.xml_path,
+                        error          = EXCLUDED.error,
+                        updated_at     = NOW()
+                """, (
+                    client_id,
+                    data.get("status", "pending"),
+                    data.get("branch_name"),
+                    data.get("branch_code"),
+                    data.get("officer_name"),
+                    data.get("available_pcs", "1"),
+                    data.get("registered_pcs", "1"),
+                    data.get("pdf_path"),
+                    data.get("xml_path"),
+                    data.get("error"),
+                ))
+    except Exception as e:
+        logger.error(f"DB session_set: {e}")
+
+
+def _db_save_audit(client_id: str, computer_name: str, audit_dict: dict,
+                   json_path: str, pdf_path: str, xml_path: str, executed_at: str):
+    if not _db_ok():
+        return
+    try:
+        with _db_ctx() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO audit_results
+                        (client_id, computer_name, audit_json, json_path, pdf_path, xml_path, executed_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (client_id, computer_name, PgJson(audit_dict),
+                      json_path, pdf_path, xml_path, executed_at))
+    except Exception as e:
+        logger.error(f"DB audit insert: {e}")
+
+
+# ── WiFi password store (DB-backed, file fallback) ────────────────────────────
 _WIFI_PASS_FILE = os.path.join(USER_INFO_DIR, "wifi_passwords.json")
 wifi_passwords: dict = {}
 
+
 def _load_wifi_passwords():
     global wifi_passwords
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT ssid, password FROM wifi_passwords")
+                    wifi_passwords = {r[0]: r[1] for r in cur.fetchall()}
+            return
+        except Exception as e:
+            logger.error(f"DB load wifi passwords: {e}")
+    # file fallback
     try:
         if os.path.exists(_WIFI_PASS_FILE):
             with open(_WIFI_PASS_FILE, "r", encoding="utf-8") as f:
@@ -74,14 +259,28 @@ def _load_wifi_passwords():
     except Exception:
         wifi_passwords = {}
 
+
 def _save_wifi_passwords():
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor() as cur:
+                    for ssid, pwd in wifi_passwords.items():
+                        cur.execute("""
+                            INSERT INTO wifi_passwords (ssid, password)
+                            VALUES (%s, %s)
+                            ON CONFLICT (ssid) DO UPDATE
+                                SET password = EXCLUDED.password, updated_at = NOW()
+                        """, (ssid, pwd))
+            return
+        except Exception as e:
+            logger.error(f"DB save wifi passwords: {e}")
+    # file fallback
     try:
         with open(_WIFI_PASS_FILE, "w", encoding="utf-8") as f:
             json.dump(wifi_passwords, f)
-    except Exception as e:
-        logger.warning(f"Could not save wifi passwords: {e}")
-
-_load_wifi_passwords()
+    except Exception as ex:
+        logger.warning(f"Could not save wifi passwords: {ex}")
 
 
 def _get_lan_ip() -> str:
@@ -125,7 +324,12 @@ def _open_firewall_port(port: int = 8000):
 
 
 @app.on_event("startup")
-async def _print_network_url():
+async def _startup():
+    # 1. PostgreSQL
+    _init_db()
+    # 2. WiFi passwords (from DB if connected, else from file)
+    _load_wifi_passwords()
+    # 3. Print network info
     lan_ip = _get_lan_ip()
     _open_firewall_port(8000)
     logger.info("=" * 54)
@@ -133,6 +337,8 @@ async def _print_network_url():
     logger.info("=" * 54)
     logger.info(f"  Local   : http://localhost:8000")
     logger.info(f"  Network : http://{lan_ip}:8000")
+    db_status = f"PostgreSQL \"{PG_DATABASE}\" @ {PG_HOST}" if _db_ok() else "File storage (no DB)"
+    logger.info(f"  Storage : {db_status}")
     logger.info("  Share the Network URL with client workstations")
     logger.info("-" * 54)
     logger.info("  macOS : right-click .command -> Open, or run:")
@@ -436,7 +642,7 @@ class NetworkScanRequest(BaseModel):
 # ==============================================================================
 @app.get("/check-status")
 def check_status(client_id: str = Query(...)):
-    session = sessions.get(client_id, {"status": "pending"})
+    session = _session_get(client_id)
     return JSONResponse(content=session)
 
 
@@ -463,12 +669,12 @@ def download_vbs(
     officer_name: str = Query("SANDIP BALIRAM LOKHANDE"),
 ):
     base_url = str(request.base_url).rstrip("/")
-    sessions[client_id] = {
+    _session_set(client_id, {
         "status": "pending", "branch_name": branch_name,
         "branch_code": branch_code, "officer_name": officer_name,
         "available_pcs": "1", "registered_pcs": "1",
         "pdf_path": None, "xml_path": None,
-    }
+    })
     vbs = (
         f'Set objShell = CreateObject("WScript.Shell")\n'
         f'command = "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -Command " & Chr(34) & '
@@ -502,12 +708,12 @@ def download_mac(
     officer_name: str = Query("SANDIP BALIRAM LOKHANDE"),
 ):
     base_url = str(request.base_url).rstrip("/")
-    sessions[client_id] = {
+    _session_set(client_id, {
         "status": "pending", "branch_name": branch_name,
         "branch_code": branch_code, "officer_name": officer_name,
         "available_pcs": "1", "registered_pcs": "1",
         "pdf_path": None, "xml_path": None,
-    }
+    })
     cmd = f'#!/bin/bash\ncurl -s "{base_url}/download-mac-script?client_id={client_id}" | bash\n'
     headers = {"Content-Disposition": f"attachment; filename=verify_system_{client_id}.command"}
     return Response(content=cmd, media_type="application/octet-stream", headers=headers)
@@ -522,12 +728,12 @@ def download_linux(
     officer_name: str = Query("SANDIP BALIRAM LOKHANDE"),
 ):
     base_url = str(request.base_url).rstrip("/")
-    sessions[client_id] = {
+    _session_set(client_id, {
         "status": "pending", "branch_name": branch_name,
         "branch_code": branch_code, "officer_name": officer_name,
         "available_pcs": "1", "registered_pcs": "1",
         "pdf_path": None, "xml_path": None,
-    }
+    })
     sh = f'#!/bin/bash\ncurl -s "{base_url}/download-mac-script?client_id={client_id}" | bash\n'
     headers = {"Content-Disposition": f"attachment; filename=verify_system_{client_id}.sh"}
     return Response(content=sh, media_type="application/octet-stream", headers=headers)
@@ -622,7 +828,7 @@ def upload_audit(data: AuditData, client_id: str = Query(None)):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     clean_name = "".join(x for x in data.computer_name if x.isalnum() or x in "._- ").strip() or "Unknown"
 
-    session_meta  = sessions.get(cid, {})
+    session_meta  = _session_get(cid)
     branch_name   = session_meta.get("branch_name",   "RELIGARE BROKING LIMITED")
     branch_code   = session_meta.get("branch_code",   "8301231")
     officer_name  = session_meta.get("officer_name",  "SANDIP BALIRAM LOKHANDE")
@@ -1055,18 +1261,23 @@ def upload_audit(data: AuditData, client_id: str = Query(None)):
         logger.error(f"XML generation failed: {e}")
 
     if not os.path.exists(pdf_path) or not os.path.exists(xml_path):
-        sessions[cid] = {
+        _session_set(cid, {
             "status": "failed", "branch_name": branch_name, "branch_code": branch_code,
             "officer_name": officer_name, "error": "Report generation failed.",
             "pdf_path": pdf_path if os.path.exists(pdf_path) else None,
             "xml_path": xml_path if os.path.exists(xml_path) else None,
-        }
+        })
         raise HTTPException(status_code=500, detail="Audit report generation failed.")
 
-    sessions[cid] = {
+    _session_set(cid, {
         "status": "completed", "branch_name": branch_name, "branch_code": branch_code,
         "officer_name": officer_name, "pdf_path": pdf_path, "xml_path": xml_path,
-    }
+    })
+    # Persist audit data to PostgreSQL
+    _db_save_audit(
+        cid, data.computer_name, model_to_dict(data),
+        json_path, pdf_path, xml_path, audit_time
+    )
     return {"status": "success", "pdf_report": pdf_path, "xml_report": xml_path}
 
 
@@ -1075,7 +1286,7 @@ def upload_audit(data: AuditData, client_id: str = Query(None)):
 # ==============================================================================
 @app.get("/download-report")
 def download_report(client_id: str = Query(...), format: str = Query("pdf"), action: str = Query("download")):
-    session = sessions.get(client_id)
+    session = _session_get(client_id)
     if not session or session.get("status") != "completed":
         raise HTTPException(status_code=404, detail="Audit report not ready or not found.")
     disposition = "inline" if action == "view" else "attachment"
@@ -1093,24 +1304,49 @@ def download_report(client_id: str = Query(...), format: str = Query("pdf"), act
 
 
 # ==============================================================================
-# 7. ASSET METADATA — PHASE 3
+# 7. ASSET METADATA — PHASE 3  (PostgreSQL-backed, file fallback)
 # ==============================================================================
 @app.post("/asset-metadata")
 def save_asset_metadata(metadata: AssetMetadata):
     metadata.last_updated = datetime.now().isoformat()
+    data_dict = model_to_dict(metadata)
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO asset_metadata (device_id, data)
+                        VALUES (%s, %s)
+                        ON CONFLICT (device_id) DO UPDATE
+                            SET data = EXCLUDED.data, updated_at = NOW()
+                    """, (metadata.device_id, PgJson(data_dict)))
+            logger.info(f"Asset saved to DB: {metadata.device_id}")
+            return {"status": "saved", "device_id": metadata.device_id}
+        except Exception as e:
+            logger.error(f"DB asset save: {e}")
+    # file fallback
     path = f"{ASSET_METADATA_DIR}/{metadata.device_id}.json"
     try:
         with open(path, "w") as f:
-            json.dump(model_to_dict(metadata), f, indent=4)
-        logger.info(f"Asset metadata saved: {metadata.device_id}")
+            json.dump(data_dict, f, indent=4)
         return {"status": "saved", "device_id": metadata.device_id}
     except Exception as e:
-        logger.error(f"Failed to save asset metadata: {e}")
         raise HTTPException(status_code=500, detail="Failed to save metadata.")
 
 
 @app.get("/asset-metadata/{device_id}")
 def get_asset_metadata(device_id: str):
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT data FROM asset_metadata WHERE device_id = %s", (device_id,))
+                    row = cur.fetchone()
+                    if row:
+                        return row["data"]
+        except Exception as e:
+            logger.error(f"DB asset get: {e}")
+    # file fallback
     path = f"{ASSET_METADATA_DIR}/{device_id}.json"
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Asset not found.")
@@ -1120,16 +1356,41 @@ def get_asset_metadata(device_id: str):
 
 @app.put("/asset-metadata/{device_id}")
 def update_asset_metadata(device_id: str, metadata: AssetMetadata):
-    metadata.device_id   = device_id
+    metadata.device_id    = device_id
     metadata.last_updated = datetime.now().isoformat()
+    data_dict = model_to_dict(metadata)
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO asset_metadata (device_id, data)
+                        VALUES (%s, %s)
+                        ON CONFLICT (device_id) DO UPDATE
+                            SET data = EXCLUDED.data, updated_at = NOW()
+                    """, (device_id, PgJson(data_dict)))
+            return {"status": "updated", "device_id": device_id}
+        except Exception as e:
+            logger.error(f"DB asset update: {e}")
+    # file fallback
     path = f"{ASSET_METADATA_DIR}/{device_id}.json"
     with open(path, "w") as f:
-        json.dump(model_to_dict(metadata), f, indent=4)
+        json.dump(data_dict, f, indent=4)
     return {"status": "updated", "device_id": device_id}
 
 
 @app.delete("/asset-metadata/{device_id}")
 def delete_asset_metadata(device_id: str):
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM asset_metadata WHERE device_id = %s RETURNING device_id", (device_id,))
+                    if cur.fetchone():
+                        return {"status": "deleted", "device_id": device_id}
+        except Exception as e:
+            logger.error(f"DB asset delete: {e}")
+    # file fallback
     path = f"{ASSET_METADATA_DIR}/{device_id}.json"
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Asset not found.")
@@ -1139,6 +1400,16 @@ def delete_asset_metadata(device_id: str):
 
 @app.get("/assets")
 def list_assets():
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT data FROM asset_metadata ORDER BY updated_at DESC")
+                    assets = [row["data"] for row in cur.fetchall()]
+            return {"assets": assets, "total": len(assets)}
+        except Exception as e:
+            logger.error(f"DB list assets: {e}")
+    # file fallback
     assets = []
     if os.path.exists(ASSET_METADATA_DIR):
         for fn in os.listdir(ASSET_METADATA_DIR):
@@ -1153,10 +1424,28 @@ def list_assets():
 
 
 # ==============================================================================
-# 8. AUDIT DEVICE & SOFTWARE QUERIES
+# 8. AUDIT DEVICE & SOFTWARE QUERIES  (PostgreSQL-backed, file fallback)
 # ==============================================================================
 @app.get("/api/devices")
 def list_audited_devices():
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT DISTINCT ON (computer_name)
+                            computer_name,
+                            executed_at                        AS last_seen,
+                            audit_json->>'os_name'             AS os_name,
+                            json_path                          AS file
+                        FROM audit_results
+                        ORDER BY computer_name, created_at DESC
+                    """)
+                    devices = [dict(r) for r in cur.fetchall()]
+            return {"devices": devices, "total": len(devices)}
+        except Exception as e:
+            logger.error(f"DB list devices: {e}")
+    # file fallback
     devices = {}
     if os.path.exists(USER_INFO_DIR):
         for fn in os.listdir(USER_INFO_DIR):
@@ -1169,9 +1458,9 @@ def list_audited_devices():
                     if name not in devices or ts > devices[name]["last_seen"]:
                         devices[name] = {
                             "computer_name": name,
-                            "last_seen":     ts,
-                            "os_name":       d.get("os_name", ""),
-                            "file":          fn,
+                            "last_seen": ts,
+                            "os_name":   d.get("os_name", ""),
+                            "file":      fn,
                         }
                 except Exception:
                     pass
@@ -1180,9 +1469,25 @@ def list_audited_devices():
 
 @app.get("/api/software/{computer_name}")
 def get_software_for_device(computer_name: str):
-    # Collect all audit files for this device, sorted newest-first
+    # Collect all audits for this device, newest-first (max 2 for diff)
     audits = []
-    if os.path.exists(USER_INFO_DIR):
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT audit_json, executed_at
+                        FROM audit_results
+                        WHERE LOWER(computer_name) = LOWER(%s)
+                        ORDER BY created_at DESC
+                        LIMIT 2
+                    """, (computer_name,))
+                    for row in cur.fetchall():
+                        audits.append((row["executed_at"] or "", row["audit_json"] or {}))
+        except Exception as e:
+            logger.error(f"DB software query: {e}")
+    # file fallback
+    if not audits and os.path.exists(USER_INFO_DIR):
         for fn in os.listdir(USER_INFO_DIR):
             if fn.endswith(".json") and fn.startswith("audit_"):
                 try:
