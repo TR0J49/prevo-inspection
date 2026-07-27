@@ -2640,10 +2640,11 @@ function renderWifiDevices(devices) {
             ? `<span class="badge badge-green">✅ Audited</span>` 
             : `<span class="badge badge-orange">⚠️ Unaudited</span>`;
         
-        const uname = d.username && d.username !== 'N/A' ? d.username : '—';
-        const usernameHtml = isAudited && uname !== '—'
+        const uname = (d.username && d.username !== 'N/A' && d.username !== '') ? d.username : '—';
+        const hasUser = uname !== '—';
+        const usernameHtml = hasUser
             ? `<span style="font-weight:600; color:var(--text);">${esc(uname)}</span>`
-            : `<span style="color:var(--muted); font-style:italic;">${esc(uname)}</span>`;
+            : `<span style="color:var(--muted); font-style:italic;">—</span>`;
 
         // hostname: prefer computer_name (audited) → resolved hostname → IP
         const hostname = (isAudited && d.computer_name && d.computer_name !== '—' && d.computer_name !== 'Unknown')
