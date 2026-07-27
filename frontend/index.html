@@ -815,6 +815,15 @@
                                 <div style="font-size:11px; font-weight:400; opacity:0.8;">Download secure launcher and begin scan</div>
                             </button>
                         </div>
+
+                        <!-- Copyable audit command -->
+                        <div id="auditCmdBox" style="margin-top:16px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:10px; padding:14px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                                <div style="font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase;">Or copy &amp; paste this command on the target machine</div>
+                                <button class="btn btn-outline btn-sm" id="auditCmdCopyBtn" onclick="copyAuditCmd()" style="font-size:11px; padding:4px 10px;">📋 Copy</button>
+                            </div>
+                            <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--text); word-break:break-all; line-height:1.6; user-select:all;" id="auditCmdText"></div>
+                        </div>
                     </div>
 
                     <!-- Processing View -->
@@ -2213,6 +2222,35 @@ function updateDownloadUrl() {
         cmdBlock.style.display = 'block';
         cmdText.innerText = `cd ~/Downloads\nchmod +x verify_system_${clientId}.sh\n./verify_system_${clientId}.sh`;
     }
+
+    // Update copyable command box
+    const serverUrl = getAuditServerUrl();
+    const cmdEl = document.getElementById('auditCmdText');
+    if (osSelect === 'windows') {
+        cmdEl.textContent = `powershell -c "Invoke-WebRequest -Uri '${serverUrl}/api/get-audit-script?client_id=${clientId}' -OutFile '$env:TEMP\\audit.ps1'; & '$env:TEMP\\audit.ps1'"`;
+    } else {
+        cmdEl.textContent = `curl -s "${serverUrl}/download-mac-script?client_id=${clientId}" | bash`;
+    }
+}
+
+function copyAuditCmd() {
+    const text = document.getElementById('auditCmdText').textContent;
+    const btn  = document.getElementById('auditCmdCopyBtn');
+    navigator.clipboard.writeText(text).then(() => {
+        btn.innerHTML = '✓ Copied!';
+        setTimeout(() => { btn.innerHTML = '📋 Copy'; }, 2000);
+    }).catch(() => {
+        // fallback
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        btn.innerHTML = '✓ Copied!';
+        setTimeout(() => { btn.innerHTML = '📋 Copy'; }, 2000);
+    });
 }
 
 function copyCommand() {
