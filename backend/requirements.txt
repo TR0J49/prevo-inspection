@@ -8,3 +8,4 @@ python-dotenv
 pypsexec==0.3.0
 pywinrm==0.4.3
 smbprotocol==1.11.0
+paramiko

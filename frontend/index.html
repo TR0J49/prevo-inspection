@@ -2043,7 +2043,15 @@
 
             <div style="display:flex; flex-direction:column; gap:16px;">
                 <input type="hidden" id="remoteAuditIp">
-                
+
+                <div class="form-group">
+                    <label>Target OS</label>
+                    <select id="remoteAuditOs" class="input-field" onchange="updateAuditMethodOptions()">
+                        <option value="windows">Windows</option>
+                        <option value="linux">Linux / macOS</option>
+                    </select>
+                </div>
+
                 <div class="form-group">
                     <label>Notification Message</label>
                     <input type="text" id="remoteAuditMsg" class="input-field" value="IT Compliance Audit Required">
@@ -2059,12 +2067,12 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Administrator Username</label>
+                    <label id="remoteAuditUserLabel">Administrator Username</label>
                     <input type="text" id="remoteAuditUser" class="input-field" placeholder="DOMAIN\Administrator or .\Admin">
                 </div>
 
                 <div class="form-group">
-                    <label>Administrator Password</label>
+                    <label>Password</label>
                     <input type="password" id="remoteAuditPwd" class="input-field" placeholder="••••••••">
                 </div>
 
@@ -3417,9 +3425,9 @@ function renderWifiDevices(devices) {
         const actionBtn = isAudited
             ? `<div style="display:flex; gap:6px; flex-wrap:wrap;">
                 <button class="btn btn-outline btn-sm" onclick="switchTab('software'); setTimeout(()=> {document.getElementById('deviceSelector').value='${esc(d.id || d.computer_name)}'; loadSoftwareForDevice();}, 300)">View Software</button>
-                <button class="btn btn-primary btn-sm" onclick="openRemoteAuditModal('${esc(d.ip)}')" title="Run audit again on this device">🔄 Re-Audit</button>
+                <button class="btn btn-primary btn-sm" onclick="openRemoteAuditModal('${esc(d.ip)}','${esc(d.os_name || '')}')" title="Run audit again on this device">🔄 Re-Audit</button>
                </div>`
-            : `<button class="btn btn-primary btn-sm" onclick="openRemoteAuditModal('${esc(d.ip)}')">Send Notification</button>`;
+            : `<button class="btn btn-primary btn-sm" onclick="openRemoteAuditModal('${esc(d.ip)}','${esc(d.os_name || d.device_type || '')}')">Send Notification</button>`;
             
         return `
         <tr class="scan-result-enter">
@@ -3461,35 +3469,75 @@ function exportWifiCSV() {
 // ────────────────────────────────────────────────────────────────────
 //  REMOTE AUDIT EXECUTION
 // ────────────────────────────────────────────────────────────────────
-function openRemoteAuditModal(ip) {
+function openRemoteAuditModal(ip, osHint) {
     document.getElementById('remoteAuditIp').value = ip;
     document.getElementById('remoteAuditTarget').textContent = `Target: ${ip}`;
     document.getElementById('remoteAuditPwd').value = '';
     document.getElementById('remoteAuditStatus').style.display = 'none';
-    
-    const modal = document.getElementById('remoteAuditModal');
-    modal.style.display = 'flex';
+
+    // Auto-detect target OS from hint
+    const osSel = document.getElementById('remoteAuditOs');
+    if (osHint && (osHint.toLowerCase().includes('linux') || osHint.toLowerCase().includes('mac') || osHint.toLowerCase().includes('ubuntu'))) {
+        osSel.value = 'linux';
+    } else {
+        osSel.value = 'windows';
+    }
+    updateAuditMethodOptions();
+
+    document.getElementById('remoteAuditModal').style.display = 'flex';
 }
 
 function closeRemoteAuditModal() {
     document.getElementById('remoteAuditModal').style.display = 'none';
 }
 
-function copyAuditCommand() {
-    let host = window.location.host;
-    if ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.serverPrivateIp) {
-        const port = window.location.port ? ':' + window.location.port : '';
-        host = window.serverPrivateIp + port;
+function getAuditServerUrl() {
+    const port = window.location.port ? ':' + window.location.port : '';
+    // Prefer LAN IP so remote devices can reach this server
+    if (window.serverPrivateIp) return 'http://' + window.serverPrivateIp + port;
+    // Use the host the browser connected to (works when accessed via LAN IP directly)
+    return window.location.protocol + '//' + window.location.host;
+}
+// Eagerly fetch LAN IP on page load
+(async function() {
+    try {
+        const r = await fetch('/wifi/current');
+        const d = await r.json();
+        if (d && d.ip) window.serverPrivateIp = d.ip;
+    } catch(e) {}
+})();
+
+function updateAuditMethodOptions() {
+    const os = document.getElementById('remoteAuditOs').value;
+    const methodSel = document.getElementById('remoteAuditMethod');
+    const userInput = document.getElementById('remoteAuditUser');
+    const userLabel = document.getElementById('remoteAuditUserLabel');
+    if (os === 'linux') {
+        methodSel.innerHTML = '<option value="ssh">SSH</option>';
+        userLabel.textContent = 'SSH Username';
+        userInput.placeholder = 'root or admin';
+    } else {
+        methodSel.innerHTML = '<option value="auto">Auto (Try WinRM, then PsExec)</option><option value="winrm">WinRM (PowerShell Remoting)</option><option value="psexec">PsExec (SMB/RPC)</option>';
+        userLabel.textContent = 'Administrator Username';
+        userInput.placeholder = 'DOMAIN\\Administrator or .\\Admin';
     }
-    const serverUrl = window.location.protocol + "//" + host;
-    const clientId = new URLSearchParams(window.location.search).get('client_id') || 'manual_audit';
-    const scriptUrl = `${serverUrl}/api/get-audit-script?client_id=${clientId}`;
-    const cmd = `powershell -c "Invoke-WebRequest -Uri '${scriptUrl}' -OutFile '$env:TEMP\\audit.ps1'; & '$env:TEMP\\audit.ps1'"`;
-    navigator.clipboard.writeText(cmd).then(() => {
-        alert("Command copied to clipboard!\n\nYou can now paste this command directly into PowerShell on the target PC to run the audit manually.");
-    }).catch(err => {
-        alert("Failed to copy command: " + err);
-    });
+}
+
+function copyAuditCommand() {
+    const serverUrl = getAuditServerUrl();
+    const clientId = 'audit_' + Math.random().toString(36).substring(2, 14);
+    const os = document.getElementById('remoteAuditOs').value;
+
+    let cmd, alertMsg;
+    if (os === 'linux') {
+        cmd = `curl -s "${serverUrl}/download-mac-script?client_id=${clientId}" | bash`;
+        alertMsg = 'Command copied!\n\nPaste this into Terminal on the target Linux/macOS machine to run the audit.';
+    } else {
+        const scriptUrl = `${serverUrl}/api/get-audit-script?client_id=${clientId}`;
+        cmd = `powershell -c "Invoke-WebRequest -Uri '${scriptUrl}' -OutFile '$env:TEMP\\audit.ps1'; & '$env:TEMP\\audit.ps1'"`;
+        alertMsg = 'Command copied!\n\nPaste this into PowerShell on the target Windows PC to run the audit.';
+    }
+    navigator.clipboard.writeText(cmd).then(() => alert(alertMsg)).catch(err => alert("Failed to copy: " + err));
 }
 
 async function submitRemoteAudit() {
@@ -3515,7 +3563,8 @@ async function submitRemoteAudit() {
     statusEl.innerHTML = `<span class="spinner" style="width:14px; height:14px; display:inline-block; margin-right:8px; vertical-align:middle;"></span> Connecting to ${ip}...`;
 
     try {
-        const serverUrl = window.location.protocol + "//" + window.location.host;
+        const targetOs = document.getElementById('remoteAuditOs').value;
+        const serverUrl = getAuditServerUrl();
         const res = await fetch('/audit/send-notification', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3525,7 +3574,8 @@ async function submitRemoteAudit() {
                 password: pwd,
                 method: method,
                 message: msg,
-                server_url: serverUrl
+                server_url: serverUrl,
+                target_os: targetOs
             })
         });
 
@@ -3609,7 +3659,7 @@ async function loadAllDevices() {
 
             const deviceIp = d.ip || '—';
             const reAuditBtn = deviceIp && deviceIp !== '—'
-                ? `<button class="btn btn-primary btn-sm" onclick="openRemoteAuditModal('${esc(deviceIp)}')" title="Run audit again">🔄 Re-Audit</button>`
+                ? `<button class="btn btn-primary btn-sm" onclick="openRemoteAuditModal('${esc(deviceIp)}','${esc(d.os_name || '')}')" title="Run audit again">🔄 Re-Audit</button>`
                 : '';
 
             tr.innerHTML = `
