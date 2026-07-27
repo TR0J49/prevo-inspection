@@ -1589,15 +1589,26 @@ def network_scan(request: NetworkScanRequest):
             return "Web Service / Network Device"
         return "Unknown Device"
 
+    def _resolve_host(ip_str: str) -> str:
+        """Try reverse DNS (gethostbyaddr), fall back to getfqdn, then IP."""
+        try:
+            name, _, _ = socket.gethostbyaddr(ip_str)
+            if name and name != ip_str:
+                return name.split(".")[0]   # short hostname, cleaner display
+        except Exception:
+            pass
+        try:
+            fqdn = socket.getfqdn(ip_str)
+            if fqdn and fqdn != ip_str:
+                return fqdn
+        except Exception:
+            pass
+        return ip_str   # always return the IP, never "N/A"
+
     def scan_host(ip):
         ip_str     = str(ip)
         open_ports = []
-        hostname   = ip_str
-
-        try:
-            hostname = socket.getfqdn(ip_str)
-        except Exception:
-            pass
+        hostname   = _resolve_host(ip_str)
 
         for port in common_ports:
             try:
@@ -1613,7 +1624,7 @@ def network_scan(request: NetworkScanRequest):
             port_labels = [f"{p} ({PORT_LABELS.get(p, 'Unknown')})" for p in open_ports]
             return {
                 "ip":          ip_str,
-                "hostname":    hostname if hostname != ip_str else "N/A",
+                "hostname":    hostname,
                 "open_ports":  open_ports,
                 "port_labels": port_labels,
                 "device_type": guess_device_type(open_ports),
@@ -1684,13 +1695,7 @@ def network_scan(request: NetworkScanRequest):
                 if ip_str in discovered_dict:
                     continue
 
-                hostname = ip_str
-                try:
-                    resolved = socket.getfqdn(ip_str)
-                    if resolved != ip_str:
-                        hostname = resolved
-                except Exception:
-                    pass
+                hostname = _resolve_host(ip_str)
 
                 # Guess device type by hostname pattern
                 h_lower = hostname.lower()
@@ -1703,7 +1708,7 @@ def network_scan(request: NetworkScanRequest):
 
                 discovered_dict[ip_str] = {
                     "ip":          ip_str,
-                    "hostname":    hostname if hostname != ip_str else "N/A",
+                    "hostname":    hostname,
                     "open_ports":  [],
                     "port_labels": [f"MAC: {mac_str}"],
                     "device_type": dev_type,
@@ -2136,6 +2141,48 @@ def wifi_scan_devices(subnet: str = Query(None)):
 
     # Build audit lookup: ip_address -> {computer_name, os_name, username, last_audit}
     audit_index: dict = {}
+
+    # 1. Query PostgreSQL (preferred)
+    if _db_ok():
+        try:
+            with _db_ctx() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT DISTINCT ON (computer_name)
+                            computer_name,
+                            audit_json->>'os_name'          AS os_name,
+                            audit_json->'network_details'   AS network_details,
+                            audit_json->'user_accounts'     AS user_accounts,
+                            executed_at
+                        FROM audit_results
+                        ORDER BY computer_name, created_at DESC
+                    """)
+                    for row in cur.fetchall():
+                        d = dict(row)
+                        net_list = d.get("network_details") or []
+                        users    = d.get("user_accounts") or []
+                        # pick first non-disabled, non-system username
+                        username = "—"
+                        for u in users:
+                            n = (u.get("name") or "").strip()
+                            if n and n.lower() not in ("", "unknown") and u.get("disabled", "False") != "True":
+                                username = n
+                                break
+                        for net in net_list:
+                            raw_ip = net.get("ip_address", "")
+                            for ip_part in raw_ip.split(","):
+                                ip_clean = ip_part.strip()
+                                if ip_clean and ip_clean not in ("Unknown", ""):
+                                    audit_index[ip_clean] = {
+                                        "computer_name": d.get("computer_name", "—"),
+                                        "os_name":       d.get("os_name") or "Unknown",
+                                        "username":      username,
+                                        "last_audit":    d.get("executed_at", ""),
+                                    }
+        except Exception as e:
+            logger.error(f"DB audit_index: {e}")
+
+    # 2. File fallback (or supplement DB results)
     if os.path.exists(USER_INFO_DIR):
         for fn in os.listdir(USER_INFO_DIR):
             if not (fn.endswith(".json") and fn.startswith("audit_")):
@@ -2144,16 +2191,21 @@ def wifi_scan_devices(subnet: str = Query(None)):
                 with open(f"{USER_INFO_DIR}/{fn}") as f:
                     d = json.load(f)
                 users    = d.get("user_accounts", [])
-                username = users[0].get("name", "Unknown") if users else "Unknown"
+                username = "—"
+                for u in users:
+                    n = (u.get("name") or "").strip()
+                    if n and n.lower() not in ("", "unknown") and u.get("disabled", "False") != "True":
+                        username = n
+                        break
                 for net in d.get("network_details", []):
                     raw_ip = net.get("ip_address", "")
                     for ip_part in raw_ip.split(","):
                         ip_clean = ip_part.strip()
-                        if ip_clean and ip_clean not in ("Unknown", ""):
+                        if ip_clean and ip_clean not in ("Unknown", "") and ip_clean not in audit_index:
                             audit_index[ip_clean] = {
-                                "computer_name": d.get("computer_name", "Unknown"),
+                                "computer_name": d.get("computer_name", "—"),
                                 "os_name":       d.get("os_name", "Unknown"),
-                                "username":       username,
+                                "username":      username,
                                 "last_audit":    d.get("execution_datetime", ""),
                             }
             except Exception:
@@ -2170,9 +2222,11 @@ def wifi_scan_devices(subnet: str = Query(None)):
             device["last_audit"]    = a["last_audit"]
             device["audit_status"]  = "audited"
         else:
-            device["computer_name"] = device.get("hostname", "N/A")
-            device["os_name"]       = device.get("device_type", "Unknown")
-            device["username"]      = "N/A"
+            # Use actual hostname (already resolved or IP) — never "N/A"
+            hostname = device.get("hostname") or ip
+            device["computer_name"] = hostname
+            device["os_name"]       = device.get("device_type") or "Unknown Device"
+            device["username"]      = "—"
             device["last_audit"]    = ""
             device["audit_status"]  = "unaudited"
 

@@ -2640,14 +2640,22 @@ function renderWifiDevices(devices) {
             ? `<span class="badge badge-green">✅ Audited</span>` 
             : `<span class="badge badge-orange">⚠️ Unaudited</span>`;
         
-        const usernameHtml = isAudited && d.username !== 'Unknown' 
-            ? `<span style="font-weight:600; color:var(--text);">${esc(d.username)}</span>` 
-            : `<span style="color:var(--muted);">${esc(d.username)}</span>`;
-            
-        const hostname = isAudited && d.computer_name && d.computer_name !== 'Unknown' ? d.computer_name : d.hostname;
-        const osHtml = isAudited && d.os_name !== 'Unknown'
-            ? `<span style="font-weight:500;">${esc(d.os_name)}</span>`
-            : `<span style="color:var(--muted);">${esc(d.os_name)}</span>`;
+        const uname = d.username && d.username !== 'N/A' ? d.username : '—';
+        const usernameHtml = isAudited && uname !== '—'
+            ? `<span style="font-weight:600; color:var(--text);">${esc(uname)}</span>`
+            : `<span style="color:var(--muted); font-style:italic;">${esc(uname)}</span>`;
+
+        // hostname: prefer computer_name (audited) → resolved hostname → IP
+        const hostname = (isAudited && d.computer_name && d.computer_name !== '—' && d.computer_name !== 'Unknown')
+            ? d.computer_name
+            : (d.hostname && d.hostname !== 'N/A' ? d.hostname : d.ip);
+
+        const osDisplay = d.os_name && d.os_name !== 'Unknown' && d.os_name !== 'Unknown Device'
+            ? d.os_name
+            : (d.device_type && d.device_type !== 'Unknown Device' ? d.device_type : '—');
+        const osHtml = isAudited
+            ? `<span style="font-weight:500;">${esc(osDisplay)}</span>`
+            : `<span style="color:var(--muted);">${esc(osDisplay)}</span>`;
             
         const actionBtn = isAudited 
             ? `<button class="btn btn-outline btn-sm" onclick="switchTab('software'); setTimeout(()=> {document.getElementById('deviceSelector').value='${esc(d.id || d.computer_name)}'; loadSoftwareForDevice();}, 300)">View Software</button>`
