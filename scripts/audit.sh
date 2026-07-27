@@ -83,7 +83,55 @@ fi
 [ -z "$IP_ADDRESS" ] && IP_ADDRESS="Unknown"
 
 NETWORK_DETAILS="[{\"ip_address\": \"$IP_ADDRESS\", \"gateway\": \"Unknown\", \"mac\": \"$MAC_ADDRESS\"}]"
-USER_ACCOUNTS="[{\"name\": \"$USER\", \"disabled\": \"False\"}]"
+
+# User Accounts (all Excel fields)
+USER_ACCOUNTS="[]"
+if command -v python3 >/dev/null 2>&1; then
+    CURRENT_USER="$USER"
+    USER_ACCOUNTS=$(python3 - "$CURRENT_USER" <<'PYEOF'
+import subprocess, json, sys, os, pwd, grp
+current_user = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('USER', '')
+users = []
+try:
+    # Get all non-system users (uid >= 500 or 1000)
+    min_uid = 500
+    all_users = [u for u in pwd.getpwall() if u.pw_uid >= min_uid and u.pw_shell not in ('/bin/false','/usr/sbin/nologin','/sbin/nologin')]
+    # Get admin group members
+    admin_groups = {'sudo', 'wheel', 'admin'}
+    admin_members = set()
+    for g in grp.getgrall():
+        if g.gr_name in admin_groups:
+            admin_members.update(g.gr_mem)
+    for u in all_users:
+        user_type = "Administrator" if u.pw_name in admin_members else "Standard"
+        last_login = "Unknown"
+        try:
+            lr = subprocess.run(['last', '-n', '1', u.pw_name], capture_output=True, text=True, timeout=5)
+            for line in lr.stdout.splitlines():
+                if line.startswith(u.pw_name):
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        last_login = ' '.join(parts[3:7])
+                    break
+        except: pass
+        home = u.pw_dir or "Unknown"
+        if not os.path.exists(home): home = "Unknown"
+        users.append({
+            "name": u.pw_name,
+            "disabled": "False",
+            "home_directory": home,
+            "last_login": last_login,
+            "num_logins": "0",
+            "user_type": user_type,
+            "is_current": "True" if u.pw_name == current_user else "False"
+        })
+except Exception as e:
+    users = [{"name": current_user, "disabled": "False", "home_directory": "Unknown",
+              "last_login": "Unknown", "num_logins": "0", "user_type": "Unknown", "is_current": "True"}]
+print(json.dumps(users))
+PYEOF
+)
+fi
 
 # ────────────────────────────────────────────────────────────────────────────
 #  PHASE 1 — EXTENDED HARDWARE COLLECTION
@@ -95,36 +143,84 @@ GPU_JSON="[]"
 if [ "$OS_NAME" = "macOS" ]; then
     GPU_NAME=$(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Chipset Model/{print $2}' | head -1 | sed 's/^ *//')
     GPU_VRAM=$(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/VRAM \(Total\)/{print $2}' | head -1 | sed 's/^ *//')
+    GPU_DRIVER=$(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Driver Version/{print $2}' | head -1 | sed 's/^ *//')
     if [ -n "$GPU_NAME" ]; then
-        GPU_JSON="[{\"name\":\"$GPU_NAME\",\"driver_version\":\"Unknown\",\"vram\":\"${GPU_VRAM:-Unknown}\"}]"
+        GPU_JSON="[{\"name\":\"${GPU_NAME}\",\"device_name\":\"${GPU_NAME}\",\"video_processor\":\"Unknown\",\"driver_version\":\"${GPU_DRIVER:-Unknown}\",\"vram\":\"${GPU_VRAM:-Unknown}\"}]"
     fi
 elif command -v lspci >/dev/null 2>&1; then
     GPU_NAME=$(lspci 2>/dev/null | grep -i 'VGA\|3D\|Display' | head -1 | sed 's/.*: //' | sed 's/"/\\"/g')
     if [ -n "$GPU_NAME" ]; then
-        GPU_JSON="[{\"name\":\"$GPU_NAME\",\"driver_version\":\"Unknown\",\"vram\":\"Unknown\"}]"
+        GPU_JSON="[{\"name\":\"${GPU_NAME}\",\"device_name\":\"${GPU_NAME}\",\"video_processor\":\"Unknown\",\"driver_version\":\"Unknown\",\"vram\":\"Unknown\"}]"
     fi
 fi
 
-# Serial Number, Manufacturer, Model
+# Serial Number, Manufacturer, Model + BIOS + Domain + Asset Tag + Memory + Boot Time
 SERIAL_NUMBER="Unknown"
 MANUFACTURER="Unknown"
 MODEL_NAME="Unknown"
+BIOS_VERSION="Unknown"
+BIOS_DATE="Unknown"
+ASSET_TAG="Unknown"
+DOMAIN_NAME="Unknown"
+DOMAIN_ROLE="Unknown"
+DEVICE_DESC="Unknown"
+NUM_PROCESSORS="Unknown"
+PROCESSOR_TYPE="Unknown"
+MEMORY_SLOTS="Unknown"
+LAST_BOOT_TIME="Unknown"
+LAST_BACKUP_TIME="Unknown"
+
 if [ "$OS_NAME" = "macOS" ]; then
     SERIAL_NUMBER=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Serial Number \(system\)/{print $2}' | head -1 | sed 's/^ *//')
     MANUFACTURER="Apple Inc."
     MODEL_NAME=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Model Name/{print $2}' | head -1 | sed 's/^ *//')
-    [ -z "$SERIAL_NUMBER" ] && SERIAL_NUMBER="Unknown"
-    [ -z "$MODEL_NAME" ]    && MODEL_NAME="Unknown"
+    NUM_PROCESSORS=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Number of Processors/{print $2}' | head -1 | sed 's/^ *//')
+    PROCESSOR_TYPE=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Processor Name/{print $2}' | head -1 | sed 's/^ *//')
+    MEMORY_SLOTS=$(system_profiler SPMemoryDataType 2>/dev/null | awk -F': ' '/Size/{print $2}' | paste -sd',' - 2>/dev/null | head -c 200)
+    LAST_BOOT_TIME=$(sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = //' | sed 's/,.*//' | xargs -I{} python3 -c "import datetime; print(datetime.datetime.fromtimestamp({}).strftime('%Y-%m-%d %H:%M:%S'))" 2>/dev/null)
+    DOMAIN_NAME=$(dsconfigad -show 2>/dev/null | awk -F'=' '/Active Directory Domain/{print $2}' | sed 's/^ *//' || echo "Unknown")
+    BIOS_VERSION=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Boot ROM Version/{print $2}' | head -1 | sed 's/^ *//')
+    [ -z "$SERIAL_NUMBER" ]  && SERIAL_NUMBER="Unknown"
+    [ -z "$MODEL_NAME" ]     && MODEL_NAME="Unknown"
+    [ -z "$BIOS_VERSION" ]   && BIOS_VERSION="Unknown"
+    [ -z "$DOMAIN_NAME" ]    && DOMAIN_NAME="Unknown"
+    [ -z "$LAST_BOOT_TIME" ] && LAST_BOOT_TIME="Unknown"
 else
     if command -v dmidecode >/dev/null 2>&1; then
-        SERIAL_NUMBER=$(dmidecode -s system-serial-number 2>/dev/null | head -1 || echo "Unknown")
-        MANUFACTURER=$(dmidecode -s system-manufacturer 2>/dev/null | head -1 || echo "Unknown")
-        MODEL_NAME=$(dmidecode -s system-product-name 2>/dev/null | head -1 || echo "Unknown")
+        SERIAL_NUMBER=$(dmidecode -s system-serial-number 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
+        MANUFACTURER=$(dmidecode -s system-manufacturer 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
+        MODEL_NAME=$(dmidecode -s system-product-name 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
+        BIOS_VERSION=$(dmidecode -s bios-version 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
+        BIOS_DATE=$(dmidecode -s bios-release-date 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
+        ASSET_TAG=$(dmidecode -s chassis-asset-tag 2>/dev/null | grep -v '^#\|To Be Filled\|Default\|None' | head -1 || echo "Unknown")
+        PROCESSOR_TYPE=$(dmidecode -s processor-version 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
     fi
+    # Domain
+    if command -v realm >/dev/null 2>&1; then
+        DOMAIN_NAME=$(realm list 2>/dev/null | awk '/domain-name/{print $2}' | head -1)
+    fi
+    [ -z "$DOMAIN_NAME" ] && DOMAIN_NAME=$(cat /etc/hostname 2>/dev/null | cut -d'.' -f2- || echo "Unknown")
+    # Number of processors
+    NUM_PROCESSORS=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo "Unknown")
+    # Memory slots
+    if command -v dmidecode >/dev/null 2>&1; then
+        MEMORY_SLOTS=$(dmidecode -t memory 2>/dev/null | grep -E 'Size:|Type:|Speed:' | paste - - - | head -4 | sed 's/\t/,/g' | tr '\n' ';')
+    fi
+    # Last boot
+    LAST_BOOT_TIME=$(who -b 2>/dev/null | awk '{print $3,$4}' | head -1)
+    [ -z "$LAST_BOOT_TIME" ] && LAST_BOOT_TIME=$(uptime -s 2>/dev/null || echo "Unknown")
 fi
-SERIAL_NUMBER=$(echo "$SERIAL_NUMBER" | sed 's/"/\\"/g')
-MANUFACTURER=$(echo "$MANUFACTURER"  | sed 's/"/\\"/g')
-MODEL_NAME=$(echo "$MODEL_NAME"      | sed 's/"/\\"/g')
+
+SERIAL_NUMBER=$(echo "$SERIAL_NUMBER" | sed 's/"/\\"/g' | tr -d '\n')
+MANUFACTURER=$(echo "$MANUFACTURER"   | sed 's/"/\\"/g' | tr -d '\n')
+MODEL_NAME=$(echo "$MODEL_NAME"       | sed 's/"/\\"/g' | tr -d '\n')
+BIOS_VERSION=$(echo "$BIOS_VERSION"   | sed 's/"/\\"/g' | tr -d '\n')
+BIOS_DATE=$(echo "$BIOS_DATE"         | sed 's/"/\\"/g' | tr -d '\n')
+ASSET_TAG=$(echo "$ASSET_TAG"         | sed 's/"/\\"/g' | tr -d '\n')
+DOMAIN_NAME=$(echo "$DOMAIN_NAME"     | sed 's/"/\\"/g' | tr -d '\n')
+PROCESSOR_TYPE=$(echo "$PROCESSOR_TYPE" | sed 's/"/\\"/g' | tr -d '\n')
+MEMORY_SLOTS=$(echo "$MEMORY_SLOTS"   | sed 's/"/\\"/g' | tr -d '\n')
+LAST_BOOT_TIME=$(echo "$LAST_BOOT_TIME" | sed 's/"/\\"/g' | tr -d '\n')
 
 # Physical Network Adapters
 NETWORK_ADAPTERS_JSON="[]"
@@ -132,21 +228,49 @@ if command -v python3 >/dev/null 2>&1; then
     if [ "$OS_NAME" = "macOS" ]; then
         NETWORK_ADAPTERS_JSON=$(python3 - <<'PYEOF'
 import subprocess, json, re
+adapters = []
 try:
     r = subprocess.run(['networksetup', '-listallhardwareports'], capture_output=True, text=True, timeout=10)
-    adapters = []
     port = ""
+    device = ""
     for line in r.stdout.splitlines():
         if 'Hardware Port:' in line:
             port = line.split(':', 1)[1].strip()
+        elif 'Device:' in line:
+            device = line.split(':', 1)[1].strip()
         elif 'Ethernet Address:' in line:
             mac = line.split(':', 1)[1].strip()
-            if port:
-                adapters.append({"name": port, "adapter_type": "Ethernet", "speed": "Unknown", "mac_address": mac})
-                port = ""
-    print(json.dumps(adapters))
-except:
-    print("[]")
+            if port and device:
+                # Get IP/gateway/mask for this interface
+                ip4 = "Unknown"; ip6 = "Unknown"; gw = "Unknown"; mask = "Unknown"
+                dns = "Unknown"; dns_domain = "Unknown"
+                try:
+                    ipres = subprocess.run(['ipconfig', 'getifaddr', device], capture_output=True, text=True, timeout=5)
+                    ip4 = ipres.stdout.strip() or "Unknown"
+                except: pass
+                try:
+                    gwres = subprocess.run(['route', '-n', 'get', 'default'], capture_output=True, text=True, timeout=5)
+                    for gl in gwres.stdout.splitlines():
+                        if 'gateway:' in gl: gw = gl.split(':', 1)[1].strip()
+                except: pass
+                try:
+                    scutil = subprocess.run(['scutil', '--dns'], capture_output=True, text=True, timeout=5)
+                    for dl in scutil.stdout.splitlines():
+                        if 'nameserver[0]' in dl: dns = dl.split(':', 1)[1].strip()
+                        if 'domain_name' in dl: dns_domain = dl.split(':', 1)[1].strip()
+                except: pass
+                adapters.append({
+                    "name": port, "description": device,
+                    "adapter_type": "Ethernet", "speed": "Unknown",
+                    "mac_address": mac, "gateway": gw,
+                    "network_mask": mask, "dns_domain": dns_domain,
+                    "dns_servers": dns, "dhcp_server": "Unknown",
+                    "ipv4_addresses": ip4, "ipv6_addresses": ip6, "mtu": "Unknown"
+                })
+                port = ""; device = ""
+except Exception as e:
+    pass
+print(json.dumps(adapters))
 PYEOF
 )
     else
@@ -154,17 +278,49 @@ PYEOF
 import subprocess, json, re
 adapters = []
 try:
-    r = subprocess.run(['ip', 'link', 'show'], capture_output=True, text=True, timeout=10)
-    iface = ""
+    r = subprocess.run(['ip', 'addr', 'show'], capture_output=True, text=True, timeout=10)
+    iface = ""; mac = ""; ipv4 = []; ipv6 = []; mtu = "Unknown"
+    def flush(iface, mac, ipv4, ipv6, mtu):
+        if iface and iface != 'lo':
+            gw = "Unknown"; dns = "Unknown"; dns_domain = "Unknown"; mask = "Unknown"
+            try:
+                gr = subprocess.run(['ip', 'route', 'show', 'dev', iface], capture_output=True, text=True, timeout=5)
+                for gl in gr.stdout.splitlines():
+                    if 'via' in gl and 'default' in gl:
+                        gw = gl.split('via')[1].split()[0]
+            except: pass
+            try:
+                with open('/etc/resolv.conf') as f:
+                    lines = f.readlines()
+                dns_list = [l.split()[1] for l in lines if l.startswith('nameserver')]
+                dns = ', '.join(dns_list[:3])
+                domain_list = [l.split()[1] for l in lines if l.startswith('domain') or l.startswith('search')]
+                dns_domain = domain_list[0] if domain_list else "Unknown"
+            except: pass
+            adapters.append({
+                "name": iface, "description": iface,
+                "adapter_type": "Ethernet", "speed": "Unknown",
+                "mac_address": mac, "gateway": gw,
+                "network_mask": mask, "dns_domain": dns_domain,
+                "dns_servers": dns, "dhcp_server": "Unknown",
+                "ipv4_addresses": ', '.join(ipv4) or "Unknown",
+                "ipv6_addresses": ', '.join(ipv6) or "Unknown",
+                "mtu": mtu
+            })
     for line in r.stdout.splitlines():
         m = re.match(r'^\d+: (\S+):', line)
         if m:
-            iface = m.group(1).rstrip(':')
-        if 'link/ether' in line and iface and iface not in ('lo',):
-            mac = line.split()[1]
-            adapters.append({"name": iface, "adapter_type": "Ethernet", "speed": "Unknown", "mac_address": mac})
-            iface = ""
-except:
+            if iface: flush(iface, mac, ipv4, ipv6, mtu)
+            iface = m.group(1).rstrip(':'); mac = "Unknown"; ipv4 = []; ipv6 = []; mtu = "Unknown"
+            mt = re.search(r'mtu (\d+)', line)
+            if mt: mtu = mt.group(1)
+        if 'link/ether' in line: mac = line.split()[1]
+        ia = re.match(r'\s+inet (\S+)', line)
+        if ia: ipv4.append(ia.group(1).split('/')[0])
+        ia6 = re.match(r'\s+inet6 (\S+)', line)
+        if ia6 and 'fe80' not in ia6.group(1): ipv6.append(ia6.group(1).split('/')[0])
+    if iface: flush(iface, mac, ipv4, ipv6, mtu)
+except Exception as e:
     pass
 print(json.dumps(adapters))
 PYEOF
@@ -172,42 +328,152 @@ PYEOF
     fi
 fi
 
-# Disk Partitions
+# Disk Partitions (all Excel fields)
 DISK_PARTITIONS_JSON="[]"
 if command -v python3 >/dev/null 2>&1; then
     if [ "$OS_NAME" = "macOS" ]; then
         DISK_PARTITIONS_JSON=$(python3 - <<'PYEOF'
 import subprocess, json
 try:
-    r = subprocess.run(['diskutil', 'list'], capture_output=True, text=True, timeout=10)
+    r = subprocess.run(['diskutil', 'list', '-plist'], capture_output=True, text=True, timeout=10)
     partitions = []
-    for line in r.stdout.splitlines():
+    # Fallback to text parsing
+    rt = subprocess.run(['diskutil', 'list'], capture_output=True, text=True, timeout=10)
+    df_out = subprocess.run(['df', '-h'], capture_output=True, text=True, timeout=5).stdout
+    df_map = {}
+    for dfline in df_out.splitlines()[1:]:
+        dparts = dfline.split()
+        if len(dparts) >= 4: df_map[dparts[0]] = (dparts[3], dparts[1])  # avail, size
+    for line in rt.stdout.splitlines():
         parts = line.split()
         if parts and parts[0].isdigit():
-            name = parts[-1] if len(parts) > 1 else "Unknown"
+            name  = parts[-1] if len(parts) > 1 else "Unknown"
             ptype = parts[1] if len(parts) > 1 else "Unknown"
             size  = " ".join(parts[3:5]) if len(parts) >= 5 else "Unknown"
-            partitions.append({"name": name, "type": ptype, "size_gb": size, "bootable": "Unknown"})
+            free_space = "Unknown"; fs = "Unknown"
+            dev = "/dev/" + name
+            if dev in df_map: free_space, _ = df_map[dev]
+            try:
+                dr = subprocess.run(['diskutil', 'info', name], capture_output=True, text=True, timeout=5)
+                for dl in dr.stdout.splitlines():
+                    if 'File System Personality' in dl or 'Type (Bundle)' in dl:
+                        fs = dl.split(':', 1)[1].strip(); break
+            except: pass
+            partitions.append({"name": name, "type": ptype, "size_gb": size,
+                                "free_space": free_space, "bootable": "Unknown", "file_system": fs})
     print(json.dumps(partitions))
 except:
     print("[]")
 PYEOF
 )
     elif command -v lsblk >/dev/null 2>&1; then
-        DISK_PARTITIONS_JSON=$(lsblk -J -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null | python3 - <<'PYEOF'
-import sys, json
+        DISK_PARTITIONS_JSON=$(lsblk -J -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE 2>/dev/null | python3 - <<'PYEOF'
+import sys, json, subprocess
 try:
     data = json.load(sys.stdin)
     partitions = []
+    df_map = {}
+    try:
+        df_out = subprocess.run(['df', '-h', '--output=target,avail'], capture_output=True, text=True, timeout=5).stdout
+        for dl in df_out.splitlines()[1:]:
+            dp = dl.split()
+            if len(dp) == 2: df_map[dp[0]] = dp[1]
+    except: pass
     def flatten(devices):
         for d in devices:
-            partitions.append({"name": d.get("name",""), "type": d.get("type",""), "size_gb": d.get("size",""), "bootable": "Unknown"})
+            mnt = d.get("mountpoint") or ""
+            free_space = df_map.get(mnt, "Unknown") if mnt else "Unknown"
+            partitions.append({
+                "name": d.get("name",""), "type": d.get("type",""),
+                "size_gb": d.get("size",""), "free_space": free_space,
+                "bootable": "Unknown", "file_system": d.get("fstype","Unknown") or "Unknown"
+            })
             if d.get("children"):
                 flatten(d["children"])
     flatten(data.get("blockdevices", []))
     print(json.dumps(partitions))
 except:
     print("[]")
+PYEOF
+)
+    fi
+fi
+
+# Physical Disk Details (Excel "Disk Information" group)
+DISK_DETAILS_JSON="[]"
+if command -v python3 >/dev/null 2>&1; then
+    if [ "$OS_NAME" = "macOS" ]; then
+        DISK_DETAILS_JSON=$(python3 - <<'PYEOF'
+import subprocess, json, re
+disks = []
+try:
+    r = subprocess.run(['diskutil', 'list'], capture_output=True, text=True, timeout=10)
+    # Get top-level disks (e.g. /dev/disk0)
+    top_disks = [l.split()[0] for l in r.stdout.splitlines() if l.startswith('/dev/disk')]
+    for dev in top_disks:
+        try:
+            ir = subprocess.run(['diskutil', 'info', dev], capture_output=True, text=True, timeout=5)
+            info = {}
+            for line in ir.stdout.splitlines():
+                if ':' in line:
+                    k, v = line.split(':', 1)
+                    info[k.strip()] = v.strip()
+            size_bytes = info.get('Disk Size', '').split('(')
+            size_str = size_bytes[0].strip() if size_bytes else "Unknown"
+            is_ssd = "Yes" if info.get('Solid State', '').lower() == 'yes' else "No"
+            disks.append({
+                "name": dev, "interface": info.get('Protocol', 'Unknown'),
+                "file_system": info.get('File System Personality', info.get('Content', 'Unknown')),
+                "manufacturer": "Apple", "model": info.get('Device / Media Name', 'Unknown'),
+                "serial_number": info.get('Device Serial Number', 'Unknown'),
+                "firmware": info.get('OS Can Be Installed to Disk', 'Unknown'),
+                "size": size_str, "free_space": "Unknown", "is_ssd": is_ssd
+            })
+        except: pass
+except: pass
+print(json.dumps(disks))
+PYEOF
+)
+    else
+        DISK_DETAILS_JSON=$(python3 - <<'PYEOF'
+import subprocess, json, os, re
+disks = []
+try:
+    r = subprocess.run(['lsblk', '-d', '-o', 'NAME,SIZE,ROTA,TRAN,MODEL,SERIAL,VENDOR', '--json'],
+                       capture_output=True, text=True, timeout=10)
+    data = json.loads(r.stdout)
+    for d in data.get('blockdevices', []):
+        is_ssd = "Yes" if d.get('rota') == "0" else "No"
+        name = d.get('name', '')
+        # Get filesystem from first partition
+        fs = "Unknown"
+        try:
+            fr = subprocess.run(['lsblk', '-o', 'FSTYPE', '-n', '/dev/' + name],
+                                capture_output=True, text=True, timeout=5)
+            fstypes = [l.strip() for l in fr.stdout.splitlines() if l.strip()]
+            if fstypes: fs = fstypes[0]
+        except: pass
+        disks.append({
+            "name": '/dev/' + name,
+            "interface": d.get('tran', 'Unknown') or "Unknown",
+            "file_system": fs,
+            "manufacturer": (d.get('vendor') or "Unknown").strip(),
+            "model": (d.get('model') or "Unknown").strip(),
+            "serial_number": d.get('serial', 'Unknown') or "Unknown",
+            "firmware": "Unknown",
+            "size": d.get('size', 'Unknown'),
+            "free_space": "Unknown",
+            "is_ssd": is_ssd
+        })
+except Exception as e:
+    # Fallback: dmidecode for disk info
+    try:
+        dr = subprocess.run(['dmidecode', '-t', '17'], capture_output=True, text=True, timeout=10)
+        disks.append({"name": "Unknown", "interface": "Unknown", "file_system": "Unknown",
+                      "manufacturer": "Unknown", "model": "Unknown", "serial_number": "Unknown",
+                      "firmware": "Unknown", "size": "Unknown", "free_space": "Unknown", "is_ssd": "Unknown"})
+    except: pass
+print(json.dumps(disks))
 PYEOF
 )
     fi
@@ -229,7 +495,13 @@ try:
         for item in items:
             name = item.get('_name', '')
             if name:
-                peripherals.append({'name': name, 'type': 'USB', 'status': 'OK'})
+                peripherals.append({
+                    'name': name,
+                    'type': 'USB',
+                    'description': item.get('_name', 'Unknown'),
+                    'manufacturer': item.get('manufacturer', 'Unknown') or 'Unknown',
+                    'version': item.get('bcd_device', 'Unknown') or 'Unknown'
+                })
             for sub in item.get('_items', []):
                 extract([sub])
     extract(data.get('SPUSBDataType', []))
@@ -240,17 +512,42 @@ PYEOF
 )
     else
         PERIPHERALS_JSON=$(python3 - <<'PYEOF'
-import subprocess, json
+import subprocess, json, re
 peripherals = []
 try:
-    r = subprocess.run(['lsusb'], capture_output=True, text=True, timeout=10)
+    r = subprocess.run(['lsusb', '-v'], capture_output=True, text=True, timeout=15)
+    current = {}
     for line in r.stdout.splitlines():
-        parts = line.split(':', 2)
-        name = parts[2].strip() if len(parts) > 2 else line.strip()
-        if name and 'root hub' not in name.lower():
-            peripherals.append({'name': name, 'type': 'USB', 'status': 'OK'})
+        line = line.strip()
+        if line.startswith('Bus ') and 'Device' in line:
+            if current.get('name'):
+                peripherals.append(current)
+            current = {'type': 'USB', 'description': 'Unknown', 'manufacturer': 'Unknown', 'version': 'Unknown'}
+            m = re.search(r'ID \S+ (.+)', line)
+            current['name'] = m.group(1).strip() if m else 'Unknown'
+        elif 'iManufacturer' in line:
+            parts = line.split(None, 2)
+            current['manufacturer'] = parts[2] if len(parts) > 2 else 'Unknown'
+        elif 'iProduct' in line:
+            parts = line.split(None, 2)
+            if len(parts) > 2: current['description'] = parts[2]
+        elif 'bcdDevice' in line:
+            parts = line.split()
+            current['version'] = parts[1] if len(parts) > 1 else 'Unknown'
+    if current.get('name'):
+        peripherals.append(current)
+    # Filter root hubs
+    peripherals = [p for p in peripherals if 'root hub' not in p.get('name','').lower()]
 except Exception:
-    pass
+    # Fallback: simple lsusb
+    try:
+        r = subprocess.run(['lsusb'], capture_output=True, text=True, timeout=10)
+        for line in r.stdout.splitlines():
+            parts = line.split(':', 2)
+            name = parts[2].strip() if len(parts) > 2 else line.strip()
+            if name and 'root hub' not in name.lower():
+                peripherals.append({'name': name, 'type': 'USB', 'description': name, 'manufacturer': 'Unknown', 'version': 'Unknown'})
+    except: pass
 print(json.dumps(peripherals))
 PYEOF
 )
@@ -434,7 +731,8 @@ try:
                 'version': a.get('version', 'Unknown'),
                 'publisher': '',
                 'install_date': a.get('lastModified', 'Unknown'),
-                'size_mb': 'Unknown'
+                'size_mb': 'Unknown',
+                'last_used': a.get('lastModified', 'Unknown')
             })
     print(json.dumps(apps))
 except Exception:
@@ -456,7 +754,7 @@ try:
             size_kb = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 0
             size_str = f"{round(size_kb/1024,2)} MB" if size_kb > 0 else "Unknown"
             apps.append({'name': parts[0].strip(), 'version': parts[1].strip(),
-                         'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str})
+                         'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str, 'last_used': 'Unknown'})
     if apps:
         print(json.dumps(apps))
         exit()
@@ -473,7 +771,7 @@ try:
             size_b = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 0
             size_str = f"{round(size_b/1048576,2)} MB" if size_b > 0 else "Unknown"
             apps.append({'name': parts[0].strip(), 'version': parts[1].strip(),
-                         'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str})
+                         'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str, 'last_used': 'Unknown'})
 except:
     pass
 print(json.dumps(apps))
@@ -619,13 +917,25 @@ JSON=$(cat <<EOF
         "cpu": "$CPU",
         "ram": "$RAM",
         "disk": "$DISK",
-        "gpu_details": $GPU_JSON,
         "serial_number": "$SERIAL_NUMBER",
         "manufacturer": "$MANUFACTURER",
         "model": "$MODEL_NAME",
+        "num_processors": "$NUM_PROCESSORS",
+        "processor_type": "$PROCESSOR_TYPE",
+        "bios_version": "$BIOS_VERSION",
+        "bios_date": "$BIOS_DATE",
+        "asset_tag": "$ASSET_TAG",
+        "last_boot_time": "$LAST_BOOT_TIME",
+        "domain": "$DOMAIN_NAME",
+        "domain_role": "$DOMAIN_ROLE",
+        "description": "$DEVICE_DESC",
+        "memory_slots": "$MEMORY_SLOTS",
+        "last_backup_time": "$LAST_BACKUP_TIME",
+        "gpu_details": $GPU_JSON,
         "network_adapters": $NETWORK_ADAPTERS_JSON,
         "peripherals": $PERIPHERALS_JSON,
-        "disk_partitions": $DISK_PARTITIONS_JSON
+        "disk_partitions": $DISK_PARTITIONS_JSON,
+        "disk_details": $DISK_DETAILS_JSON
     },
     "network_details": $NETWORK_DETAILS,
     "user_accounts": $USER_ACCOUNTS,

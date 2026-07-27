@@ -176,14 +176,42 @@ try {
     }
 } catch {}
 
-# 12. Local User Accounts
+# 12. Local User Accounts (all Excel fields)
 $userAccounts = @()
 try {
-    $users = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True" -ErrorAction SilentlyContinue
-    foreach ($u in $users) {
+    $currentUserName = $env:USERNAME
+    $wmiUsers = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True" -ErrorAction SilentlyContinue
+    # Build a map of LastLogon from Get-LocalUser if available
+    $localUserMap = @{}
+    try {
+        Get-LocalUser -ErrorAction SilentlyContinue | ForEach-Object {
+            $localUserMap[$_.Name] = $_
+        }
+    } catch {}
+    foreach ($u in $wmiUsers) {
+        $lastLogin = "Unknown"
+        $numLogins  = "0"
+        $homeDir    = "Unknown"
+        $userType   = "Standard"
+        $lu = $localUserMap[$u.Name]
+        if ($lu) {
+            if ($lu.LastLogon) { $lastLogin = $lu.LastLogon.ToString("yyyy-MM-dd HH:mm:ss") }
+            $homeDir = Get-SafeString $lu.HomeDirectory "Unknown"
+            if ([string]::IsNullOrWhiteSpace($homeDir)) { $homeDir = "Unknown" }
+        }
+        # Determine user type via group membership
+        try {
+            $isAdmin = (Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "\\$($u.Name)$" }) -ne $null
+            if ($isAdmin) { $userType = "Administrator" }
+        } catch {}
         $userAccounts += @{
-            name     = if ($u.Name) { $u.Name } else { "Unknown" }
-            disabled = if ($u.Disabled) { "True" } else { "False" }
+            name           = Get-SafeString $u.Name "Unknown"
+            disabled       = if ($u.Disabled) { "True" } else { "False" }
+            home_directory = $homeDir
+            last_login     = $lastLogin
+            num_logins     = $numLogins
+            user_type      = $userType
+            is_current     = if ($u.Name -eq $currentUserName) { "True" } else { "False" }
         }
     }
 } catch {}
@@ -203,45 +231,120 @@ try {
             $vramMB = [math]::Round($gpu.AdapterRAM / 1MB, 0).ToString() + " MB"
         }
         $gpuDetails += @{
-            name           = Get-SafeString $gpu.Name "Unknown"
-            driver_version = Get-SafeString $gpu.DriverVersion "Unknown"
-            vram           = $vramMB
+            name            = Get-SafeString $gpu.Name "Unknown"
+            device_name     = Get-SafeString $gpu.Name "Unknown"
+            video_processor = Get-SafeString $gpu.VideoProcessor "Unknown"
+            driver_version  = Get-SafeString $gpu.DriverVersion "Unknown"
+            vram            = $vramMB
         }
     }
 } catch {}
 
-# 14. Serial Number, Manufacturer & Model
+# 14. Serial Number, Manufacturer, Model, BIOS, Domain, Asset Tag, Memory, Boot Time
 Write-Host "Collecting device identity..." -ForegroundColor Cyan
-$serialNumber = "Unknown"
+$serialNumber  = "Unknown"
 $manufacturer  = "Unknown"
 $model         = "Unknown"
+$biosVersion   = "Unknown"
+$biosDate      = "Unknown"
+$assetTag      = "Unknown"
+$domainName    = "Unknown"
+$domainRole    = "Unknown"
+$deviceDesc    = "Unknown"
+$memorySlots   = "Unknown"
+$lastBootTime  = "Unknown"
+$lastBackup    = "Unknown"
+$numProcessors = "Unknown"
+$processorType = "Unknown"
+
 try {
     $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($bios) { $serialNumber = Get-SafeString $bios.SerialNumber "Unknown" }
-
-    $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($cs) {
-        $manufacturer = Get-SafeString $cs.Manufacturer "Unknown"
-        $model        = Get-SafeString $cs.Model "Unknown"
+    if ($bios) {
+        $serialNumber = Get-SafeString $bios.SerialNumber "Unknown"
+        $biosVersion  = Get-SafeString $bios.SMBIOSBIOSVersion "Unknown"
+        $rawDate = $bios.ReleaseDate
+        if ($rawDate) { $biosDate = $rawDate.ToString("yyyy-MM-dd") }
     }
 } catch {}
 
-# 15. Physical Network Adapters (Detailed)
+try {
+    $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cs) {
+        $manufacturer  = Get-SafeString $cs.Manufacturer "Unknown"
+        $model         = Get-SafeString $cs.Model "Unknown"
+        $deviceDesc    = Get-SafeString $cs.Description "Unknown"
+        $domainName    = Get-SafeString $cs.Domain "Unknown"
+        $numProcessors = Get-SafeString $cs.NumberOfProcessors.ToString() "Unknown"
+        $roleMap = @{ 0="Standalone Workstation"; 1="Member Workstation"; 2="Standalone Server"; 3="Member Server"; 4="Backup Domain Controller"; 5="Primary Domain Controller" }
+        $domainRole = Get-SafeString $roleMap[[int]$cs.DomainRole] "Unknown"
+    }
+} catch {}
+
+try {
+    $sysEnc = Get-CimInstance Win32_SystemEnclosure -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($sysEnc) {
+        $tag = Get-SafeString $sysEnc.SMBIOSAssetTag "Unknown"
+        if ($tag -notmatch "To Be Filled|Default|N/A|None|^$") { $assetTag = $tag }
+    }
+} catch {}
+
+try {
+    $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cpu) { $processorType = Get-SafeString $cpu.Description "Unknown" }
+} catch {}
+
+try {
+    $memSlots  = Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction SilentlyContinue | Select-Object -First 1
+    $memSticks = Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue
+    if ($memSlots -and $memSticks) {
+        $totalMB  = ($memSticks | Measure-Object -Property Capacity -Sum).Sum / 1MB
+        $maxCapGB = [math]::Round($memSlots.MaxCapacity / 1024, 0)
+        $memorySlots = "Slots: $($memSlots.MemoryDevices) | Installed: $([math]::Round($totalMB/1024,1)) GB | Max: $($maxCapGB) GB"
+    }
+} catch {}
+
+try {
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($os -and $os.LastBootUpTime) {
+        $lastBootTime = $os.LastBootUpTime.ToString("yyyy-MM-dd HH:mm:ss")
+    }
+} catch {}
+
+try {
+    $shadows = Get-CimInstance Win32_ShadowCopy -ErrorAction SilentlyContinue | Sort-Object InstallDate -Descending | Select-Object -First 1
+    if ($shadows) { $lastBackup = $shadows.InstallDate.ToString("yyyy-MM-dd HH:mm:ss") }
+} catch {}
+
+# 15. Physical Network Adapters (All 11 Excel fields)
 Write-Host "Collecting network adapter details..." -ForegroundColor Cyan
 $networkAdapters = @()
 try {
     $adapters = Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue |
         Where-Object { $_.PhysicalAdapter -eq $true }
+    $configs  = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True" -ErrorAction SilentlyContinue
+    $cfgIndex = @{}
+    foreach ($c in $configs) { $cfgIndex[$c.InterfaceIndex] = $c }
+
     foreach ($a in $adapters) {
         $speedMbps = "Unknown"
         if ($a.Speed -and $a.Speed -gt 0) {
             $speedMbps = [math]::Round($a.Speed / 1000000, 0).ToString() + " Mbps"
         }
+        $cfg = $cfgIndex[$a.InterfaceIndex]
         $networkAdapters += @{
-            name         = Get-SafeString $a.Name "Unknown"
-            adapter_type = Get-SafeString $a.AdapterType "Unknown"
-            speed        = $speedMbps
-            mac_address  = Get-SafeString $a.MACAddress "Unknown"
+            name           = Get-SafeString $a.Name "Unknown"
+            description    = Get-SafeString $a.Description "Unknown"
+            adapter_type   = Get-SafeString $a.AdapterType "Unknown"
+            speed          = $speedMbps
+            mac_address    = Get-SafeString $a.MACAddress "Unknown"
+            gateway        = if ($cfg -and $cfg.DefaultIPGateway) { $cfg.DefaultIPGateway -join ", " } else { "Unknown" }
+            network_mask   = if ($cfg -and $cfg.IPSubnet)         { $cfg.IPSubnet -join ", " }         else { "Unknown" }
+            dns_domain     = if ($cfg)                             { Get-SafeString $cfg.DNSDomain "Unknown" } else { "Unknown" }
+            dns_servers    = if ($cfg -and $cfg.DNSServerSearchOrder) { $cfg.DNSServerSearchOrder -join ", " } else { "Unknown" }
+            dhcp_server    = if ($cfg)                             { Get-SafeString $cfg.DHCPServer "Unknown" } else { "Unknown" }
+            ipv4_addresses = if ($cfg -and $cfg.IPAddress)        { ($cfg.IPAddress | Where-Object { $_ -match '^\d+\.\d+' }) -join ", " } else { "Unknown" }
+            ipv6_addresses = if ($cfg -and $cfg.IPAddress)        { ($cfg.IPAddress | Where-Object { $_ -match ':' }) -join ", " }         else { "Unknown" }
+            mtu            = "Unknown"
         }
     }
 } catch {}
@@ -255,25 +358,95 @@ try {
         Where-Object { $_.PNPClass -in $validClasses -and $_.Status -eq "OK" }
     foreach ($dev in $usbDevices) {
         $peripherals += @{
-            name   = Get-SafeString $dev.Name "Unknown"
-            type   = Get-SafeString $dev.PNPClass "Unknown"
-            status = Get-SafeString $dev.Status "Unknown"
+            name         = Get-SafeString $dev.Name "Unknown"
+            type         = Get-SafeString $dev.PNPClass "Unknown"
+            description  = Get-SafeString $dev.Description "Unknown"
+            manufacturer = Get-SafeString $dev.Manufacturer "Unknown"
+            version      = Get-SafeString $dev.DriverVersion "Unknown"
         }
     }
 } catch {}
 
-# 17. Disk Partitions (Detailed)
+# 17. Disk Partitions (Detailed — all Excel fields)
 Write-Host "Collecting disk partition details..." -ForegroundColor Cyan
 $diskPartitions = @()
 try {
+    # Build logical disk → free space map
+    $logicalDiskMap = @{}
+    Get-CimInstance Win32_LogicalDisk -ErrorAction SilentlyContinue | ForEach-Object {
+        $logicalDiskMap[$_.DeviceID] = $_
+    }
+    # Associate partitions → logical disks
+    $partToLogical = @{}
+    Get-CimInstance -Query "ASSOCIATORS OF {Win32_DiskPartition.DeviceID=''} WHERE AssocClass=Win32_LogicalDiskToPartition" -ErrorAction SilentlyContinue | Out-Null
+    try {
+        $assocs = Get-CimInstance Win32_LogicalDiskToPartition -ErrorAction SilentlyContinue
+        foreach ($assoc in $assocs) {
+            $partName = $assoc.Antecedent.DeviceID
+            $logName  = $assoc.Dependent.DeviceID
+            $partToLogical[$partName] = $logName
+        }
+    } catch {}
+
     $partitions = Get-CimInstance Win32_DiskPartition -ErrorAction SilentlyContinue
     foreach ($p in $partitions) {
-        $sizeGB = [math]::Round($p.Size / 1GB, 2)
+        $sizeGB     = [math]::Round($p.Size / 1GB, 2)
+        $freeSpace  = "Unknown"
+        $fileSystem = "Unknown"
+        $logDriveId = $partToLogical[$p.Name]
+        if ($logDriveId -and $logicalDiskMap[$logDriveId]) {
+            $ld = $logicalDiskMap[$logDriveId]
+            $freeSpace  = [math]::Round($ld.FreeSpace / 1GB, 2).ToString() + " GB"
+            $fileSystem = Get-SafeString $ld.FileSystem "Unknown"
+        }
         $diskPartitions += @{
-            name     = Get-SafeString $p.Name "Unknown"
-            type     = Get-SafeString $p.Type "Unknown"
-            size_gb  = $sizeGB.ToString() + " GB"
-            bootable = if ($p.Bootable) { "Yes" } else { "No" }
+            name        = Get-SafeString $p.Name "Unknown"
+            type        = Get-SafeString $p.Type "Unknown"
+            size_gb     = $sizeGB.ToString() + " GB"
+            free_space  = $freeSpace
+            bootable    = if ($p.Bootable) { "Yes" } else { "No" }
+            file_system = $fileSystem
+        }
+    }
+} catch {}
+
+# 17b. Physical Disk Details (Excel "Disk Information" group)
+Write-Host "Collecting physical disk details..." -ForegroundColor Cyan
+$diskDetails = @()
+try {
+    $physDisks = Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue
+    foreach ($d in $physDisks) {
+        $sizeGB    = if ($d.Size -and $d.Size -gt 0) { [math]::Round($d.Size / 1GB, 2).ToString() + " GB" } else { "Unknown" }
+        # Determine if SSD via model name heuristic (no WMI property for SSD in Win32_DiskDrive)
+        $isSSD = if ($d.MediaType -match "SSD|Solid" -or $d.Model -match "SSD|NVMe|M\.2|SAMSUNG SSD|WD.*SSD|Crucial|Kingston SSD") { "Yes" } else { "No" }
+        $interface = Get-SafeString $d.InterfaceType "Unknown"
+
+        # Get filesystem from first associated logical disk
+        $fileSystem = "Unknown"
+        try {
+            $partQuery = "ASSOCIATORS OF {Win32_DiskDrive.DeviceID='$($d.DeviceID -replace '\\\\','\\')' } WHERE AssocClass=Win32_DiskDriveToDiskPartition"
+            $diskParts = Get-CimInstance -Query $partQuery -ErrorAction SilentlyContinue
+            foreach ($dp in $diskParts) {
+                $logQuery = "ASSOCIATORS OF {Win32_DiskPartition.DeviceID='$($dp.DeviceID)'} WHERE AssocClass=Win32_LogicalDiskToPartition"
+                $logDisks = Get-CimInstance -Query $logQuery -ErrorAction SilentlyContinue
+                if ($logDisks) {
+                    $fileSystem = Get-SafeString ($logDisks | Select-Object -First 1).FileSystem "Unknown"
+                    break
+                }
+            }
+        } catch {}
+
+        $diskDetails += @{
+            name          = Get-SafeString $d.Name "Unknown"
+            interface     = $interface
+            file_system   = $fileSystem
+            manufacturer  = Get-SafeString $d.Manufacturer "Unknown"
+            model         = Get-SafeString $d.Model "Unknown"
+            serial_number = Get-SafeString $d.SerialNumber "Unknown"
+            firmware      = Get-SafeString $d.FirmwareRevision "Unknown"
+            size          = $sizeGB
+            free_space    = "Unknown"
+            is_ssd        = $isSSD
         }
     }
 } catch {}
@@ -299,12 +472,18 @@ try {
         if ($app.EstimatedSize -and $app.EstimatedSize -gt 0) {
             $sizeMB = [math]::Round($app.EstimatedSize / 1024, 2).ToString() + " MB"
         }
+        # last_used: try EstimatedLastUsed (rarely populated) or InstallDate as fallback
+        $lastUsed = "Unknown"
+        if ($app.PSObject.Properties["LastUsed"] -and $app.LastUsed) {
+            $lastUsed = [string]$app.LastUsed
+        }
         $softwareInventory += @{
             name         = Get-SafeString $app.DisplayName ""
             version      = Get-SafeString $app.DisplayVersion "Unknown"
             publisher    = Get-SafeString $app.Publisher "Unknown"
             install_date = Get-SafeString $app.InstallDate "Unknown"
             size_mb      = $sizeMB
+            last_used    = $lastUsed
         }
     }
     Write-Host "Found $($softwareInventory.Count) installed applications." -ForegroundColor Green
@@ -388,13 +567,25 @@ $data = @{
         cpu              = $cpuName
         ram              = $ramTotal
         disk             = $diskBasic
-        gpu_details      = $gpuDetails
         serial_number    = $serialNumber
         manufacturer     = $manufacturer
         model            = $model
+        num_processors   = $numProcessors
+        processor_type   = $processorType
+        bios_version     = $biosVersion
+        bios_date        = $biosDate
+        asset_tag        = $assetTag
+        last_boot_time   = $lastBootTime
+        domain           = $domainName
+        domain_role      = $domainRole
+        description      = $deviceDesc
+        memory_slots     = $memorySlots
+        last_backup_time = $lastBackup
+        gpu_details      = $gpuDetails
         network_adapters = $networkAdapters
         peripherals      = $peripherals
         disk_partitions  = $diskPartitions
+        disk_details     = $diskDetails
     }
     network_details       = $networkDetails
     user_accounts         = $userAccounts

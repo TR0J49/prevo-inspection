@@ -1543,7 +1543,7 @@
                             <input type="text" id="connectSsid" class="input-field"
                                 placeholder="Click a network or type SSID…">
                         </div>
-                        <div class="form-group">
+                        <div class="form-group" id="pwdFieldWrap">
                             <label for="connectPassword">WiFi Password</label>
                             <div style="position:relative;">
                                 <input type="password" id="connectPassword" class="input-field"
@@ -1556,6 +1556,11 @@
                                     👁️
                                 </button>
                             </div>
+                        </div>
+
+                        <div id="pwdSavedNote" style="display:none; padding:10px 14px; background:rgba(22,163,74,0.08); border:1px solid rgba(22,163,74,0.3); border-radius:8px; font-size:13px; color:#16a34a; display:none; align-items:center; gap:8px;">
+                            🔐 Password saved — will connect automatically.
+                            <button onclick="_forgetNetwork()" style="margin-left:auto; background:none; border:none; cursor:pointer; color:var(--muted); font-size:12px; text-decoration:underline;">Forget</button>
                         </div>
 
                         <button class="btn btn-primary btn-full" id="connectWifiBtn" onclick="connectToWifi()">
@@ -2378,6 +2383,19 @@ updateDownloadUrl();
 //  TAB 5 — WIFI DASHBOARD
 // ────────────────────────────────────────────────────────────────────
 
+// SSIDs for which a password is already saved on the server
+let wifiKnownNetworks = new Set();
+
+async function loadKnownNetworks() {
+    try {
+        const r = await fetch('/wifi/known-networks');
+        if (r.ok) {
+            const data = await r.json();
+            wifiKnownNetworks = new Set(data.networks || []);
+        }
+    } catch(e) {}
+}
+
 function togglePwd() {
     const el = document.getElementById('connectPassword');
     const btn = document.getElementById('pwdToggle');
@@ -2390,13 +2408,29 @@ function togglePwd() {
     }
 }
 
+function _updatePasswordField(ssid) {
+    const pwdWrap = document.getElementById('pwdFieldWrap');
+    const pwdInput = document.getElementById('connectPassword');
+    const savedNote = document.getElementById('pwdSavedNote');
+    if (wifiKnownNetworks.has(ssid)) {
+        pwdWrap.style.display = 'none';
+        savedNote.style.display = 'block';
+        pwdInput.value = '';
+    } else {
+        pwdWrap.style.display = 'block';
+        savedNote.style.display = 'none';
+        pwdInput.value = '';
+        pwdInput.focus();
+    }
+}
+
 async function fetchCurrentWifiStatus() {
     try {
         const r = await fetch('/wifi/current');
         const data = await r.json();
         const statusEl = document.getElementById('wifiCurrentStatus');
         if (!data) return;
-        
+
         if (data.ip) {
             window.serverPrivateIp = data.ip;
         }
@@ -2430,15 +2464,16 @@ async function fetchCurrentWifiStatus() {
 async function refreshWifiNetworks() {
     const btn = document.getElementById('refreshNetworksBtn');
     const container = document.getElementById('networkListContainer');
-    
+
     btn.disabled = true;
     btn.textContent = "🔄 Scanning...";
     container.innerHTML = `<div class="empty-state"><div class="spinner" style="margin:0 auto 16px;"></div><p>Scanning nearby networks...</p></div>`;
-    
+
     try {
+        await loadKnownNetworks();
         const r = await fetch('/wifi/networks');
         const data = await r.json();
-        
+
         if (!r.ok) {
             container.innerHTML = `<div class="empty-state"><div class="empty-icon" style="color:var(--danger)">⚠️</div><h3>Scan Failed</h3><p>${esc(data.detail || 'Could not scan networks. Windows required.')}</p></div>`;
             return;
@@ -2446,7 +2481,7 @@ async function refreshWifiNetworks() {
 
         const networks = data.networks || [];
         document.getElementById('networkListMeta').textContent = `${networks.length} networks found`;
-        
+
         if (networks.length === 0) {
             container.innerHTML = `<div class="empty-state"><div class="empty-icon">📡</div><h3>No Networks Found</h3><p>Ensure WiFi adapter is enabled.</p></div>`;
             return;
@@ -2459,17 +2494,24 @@ async function refreshWifiNetworks() {
                 if (signal < 40) bars = "🔈";
                 else if (signal < 70) bars = "🔉";
                 else bars = "🔊";
-                
+                const isKnown = wifiKnownNetworks.has(n.ssid);
+                const knownBadge = isKnown
+                    ? `<span style="font-size:10px; font-weight:600; color:var(--success,#16a34a); background:rgba(22,163,74,0.1); border:1px solid rgba(22,163,74,0.3); border-radius:4px; padding:2px 6px;">Saved ✓</span>`
+                    : '';
+                const clickAction = isKnown
+                    ? `selectAndConnect('${n.ssid.replace(/'/g, "\\'")}')`
+                    : `selectNetwork('${n.ssid.replace(/'/g, "\\'")}')`;
+
                 return `
-                <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; cursor:pointer; transition:all 0.15s;" 
-                     onmouseover="this.style.borderColor='var(--primary-lt)'" 
-                     onmouseout="this.style.borderColor='var(--border)'"
-                     onclick="document.getElementById('connectSsid').value='${esc(n.ssid)}'; document.getElementById('connectPassword').focus();">
+                <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:var(--surface-2); border:1px solid ${isKnown ? 'rgba(22,163,74,0.3)' : 'var(--border)'}; border-radius:8px; cursor:pointer; transition:all 0.15s;"
+                     onmouseover="this.style.borderColor='var(--primary-lt)'"
+                     onmouseout="this.style.borderColor='${isKnown ? 'rgba(22,163,74,0.3)' : 'var(--border)'}'"
+                     onclick="${clickAction}">
                     <div style="display:flex; align-items:center; gap:12px;">
                         <span style="font-size:18px;">${bars}</span>
                         <div>
-                            <div style="font-weight:600; font-size:14px; color:var(--text);">${esc(n.ssid)}</div>
-                            <div style="font-size:11px; color:var(--muted);">${esc(n.authentication || 'Open')} • ${esc(n.signal)} signal</div>
+                            <div style="font-weight:600; font-size:14px; color:var(--text); display:flex; align-items:center; gap:6px;">${esc(n.ssid)} ${knownBadge}</div>
+                            <div style="font-size:11px; color:var(--muted);">${esc(n.authentication || 'Open')} • ${esc(n.signal)} signal${isKnown ? ' • Click to connect automatically' : ''}</div>
                         </div>
                     </div>
                 </div>
@@ -2484,21 +2526,35 @@ async function refreshWifiNetworks() {
     }
 }
 
+// Select unknown network — fill SSID, show password field
+function selectNetwork(ssid) {
+    document.getElementById('connectSsid').value = ssid;
+    _updatePasswordField(ssid);
+}
+
+// Known network — fill SSID and auto-connect immediately (no password prompt)
+async function selectAndConnect(ssid) {
+    document.getElementById('connectSsid').value = ssid;
+    _updatePasswordField(ssid);
+    await connectToWifi();
+}
+
 async function connectToWifi() {
     const ssid = document.getElementById('connectSsid').value.trim();
-    const pwd = document.getElementById('connectPassword').value;
+    const isKnown = wifiKnownNetworks.has(ssid);
+    const pwd = isKnown ? '' : document.getElementById('connectPassword').value;
     const btn = document.getElementById('connectWifiBtn');
     const statusEl = document.getElementById('connectStatus');
-    
+
     if (!ssid) { alert("Please select or enter an SSID."); return; }
-    if (pwd.length > 0 && pwd.length < 8) { alert("WiFi password must be at least 8 characters."); return; }
-    
+    if (!isKnown && pwd.length > 0 && pwd.length < 8) { alert("WiFi password must be at least 8 characters."); return; }
+
     btn.disabled = true;
     btn.textContent = "⏳ Connecting...";
     statusEl.style.display = 'block';
     statusEl.className = 'alert alert-info';
-    statusEl.textContent = 'Connecting to ' + ssid + '...';
-    
+    statusEl.textContent = 'Connecting to ' + ssid + (isKnown ? ' (using saved password)...' : '...');
+
     try {
         const r = await fetch('/wifi/connect', {
             method: 'POST',
@@ -2506,23 +2562,27 @@ async function connectToWifi() {
             body: JSON.stringify({ssid: ssid, password: pwd})
         });
         const data = await r.json();
-        
+
         if (r.ok && (data.status === 'connected' || data.status === 'connecting')) {
+            // Password saved by backend; refresh known networks list
+            wifiKnownNetworks.add(ssid);
             statusEl.className = 'alert alert-success';
             statusEl.textContent = `✅ Connected to ${ssid}. Subnet: ${data.subnet || 'Pending'}. Auto-starting device scan...`;
-            
-            // Refresh current status block
+            _updatePasswordField(ssid);
             await fetchCurrentWifiStatus();
-            
-            // Auto start scan after 2 seconds
             setTimeout(() => {
                 document.getElementById('wifiDevicesPanel').style.display = 'block';
                 rescanWifiDevices();
             }, 2000);
-            
         } else {
             statusEl.className = 'alert alert-danger';
             statusEl.textContent = `❌ Failed: ${data.message || data.detail || 'Unknown error'}`;
+            // If a known-network connect failed, offer to re-enter password
+            if (isKnown) {
+                wifiKnownNetworks.delete(ssid);
+                statusEl.textContent += ' — saved password may be wrong. Please enter it again.';
+                _updatePasswordField(ssid);
+            }
         }
     } catch(e) {
         statusEl.className = 'alert alert-danger';
@@ -2730,7 +2790,18 @@ async function submitRemoteAudit() {
     }
 }
 
+async function _forgetNetwork() {
+    const ssid = document.getElementById('connectSsid').value.trim();
+    if (!ssid) return;
+    try {
+        await fetch(`/wifi/known-networks/${encodeURIComponent(ssid)}`, { method: 'DELETE' });
+    } catch(e) {}
+    wifiKnownNetworks.delete(ssid);
+    _updatePasswordField(ssid);
+}
+
 // Initial fetch for wifi tab
+loadKnownNetworks();
 fetchCurrentWifiStatus();
 refreshWifiNetworks();
 

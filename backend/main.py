@@ -61,6 +61,28 @@ app.add_middleware(
 
 sessions = {}
 
+# ── WiFi password store (persisted across restarts) ───────────────────────────
+_WIFI_PASS_FILE = os.path.join(USER_INFO_DIR, "wifi_passwords.json")
+wifi_passwords: dict = {}
+
+def _load_wifi_passwords():
+    global wifi_passwords
+    try:
+        if os.path.exists(_WIFI_PASS_FILE):
+            with open(_WIFI_PASS_FILE, "r", encoding="utf-8") as f:
+                wifi_passwords = json.load(f)
+    except Exception:
+        wifi_passwords = {}
+
+def _save_wifi_passwords():
+    try:
+        with open(_WIFI_PASS_FILE, "w", encoding="utf-8") as f:
+            json.dump(wifi_passwords, f)
+    except Exception as e:
+        logger.warning(f"Could not save wifi passwords: {e}")
+
+_load_wifi_passwords()
+
 
 def _get_lan_ip() -> str:
     """Return the machine's LAN IP by connecting a UDP socket (no packet sent)."""
@@ -151,8 +173,11 @@ def model_to_dict(model):
 # ==============================================================================
 
 class GpuInfo(BaseModel):
+    # Excel: Video Controllers
     name: str = "Unknown"
-    driver_version: str = "Unknown"
+    device_name: str = "Unknown"       # Excel: device name
+    video_processor: str = "Unknown"   # Excel: video processor
+    driver_version: str = "Unknown"    # Excel: drivers
     vram: str = "Unknown"
 
     @validator("*", pre=True, allow_reuse=True)
@@ -161,10 +186,20 @@ class GpuInfo(BaseModel):
 
 
 class NetworkAdapter(BaseModel):
+    # Excel: Network Adaptors (all 11 fields)
     name: str = "Unknown"
+    description: str = "Unknown"       # Excel: description
     adapter_type: str = "Unknown"
     speed: str = "Unknown"
-    mac_address: str = "Unknown"
+    mac_address: str = "Unknown"       # Excel: MAC address
+    gateway: str = "Unknown"           # Excel: gateway
+    network_mask: str = "Unknown"      # Excel: network mask
+    dns_domain: str = "Unknown"        # Excel: DNS domain
+    dns_servers: str = "Unknown"       # Excel: DNS servers
+    dhcp_server: str = "Unknown"       # Excel: DHCP server
+    ipv4_addresses: str = "Unknown"    # Excel: IPv4 addresses
+    ipv6_addresses: str = "Unknown"    # Excel: IPv6 addresses
+    mtu: str = "Unknown"               # Excel: MTU
 
     @validator("*", pre=True, allow_reuse=True)
     def normalize(cls, v):
@@ -172,9 +207,12 @@ class NetworkAdapter(BaseModel):
 
 
 class Peripheral(BaseModel):
+    # Excel: Peripherals (all 5 fields)
     name: str = "Unknown"
     type: str = "Unknown"
-    status: str = "Unknown"
+    description: str = "Unknown"       # Excel: description
+    manufacturer: str = "Unknown"      # Excel: manufacturer
+    version: str = "Unknown"           # Excel: version (was 'status')
 
     @validator("*", pre=True, allow_reuse=True)
     def normalize(cls, v):
@@ -182,10 +220,31 @@ class Peripheral(BaseModel):
 
 
 class DiskPartition(BaseModel):
+    # Excel: Partitions (all 5 fields)
     name: str = "Unknown"
     type: str = "Unknown"
     size_gb: str = "Unknown"
+    free_space: str = "Unknown"        # Excel: free space
     bootable: str = "Unknown"
+    file_system: str = "Unknown"       # Excel: file system type
+
+    @validator("*", pre=True, allow_reuse=True)
+    def normalize(cls, v):
+        return clean_string(v, "Unknown")
+
+
+class DiskInfo(BaseModel):
+    # Excel: Disk Information (all 10 fields)
+    name: str = "Unknown"
+    interface: str = "Unknown"         # Excel: interface (SATA/NVMe/USB)
+    file_system: str = "Unknown"       # Excel: file system type
+    manufacturer: str = "Unknown"      # Excel: manufacturer
+    model: str = "Unknown"             # Excel: model
+    serial_number: str = "Unknown"     # Excel: serial number
+    firmware: str = "Unknown"          # Excel: firmware
+    size: str = "Unknown"              # Excel: size
+    free_space: str = "Unknown"        # Excel: free space
+    is_ssd: str = "Unknown"            # Excel: whether it's solid state
 
     @validator("*", pre=True, allow_reuse=True)
     def normalize(cls, v):
@@ -193,24 +252,43 @@ class DiskPartition(BaseModel):
 
 
 class HardwareDetails(BaseModel):
-    # Basic
+    # Excel: Device Data — hardware fields
     cpu: str = "Unknown"
     ram: str = "Unknown"
     disk: str = "Unknown"
-    # Extended (Phase 1)
-    gpu_details: List[Union[GpuInfo, dict]] = []
     serial_number: str = "Unknown"
     manufacturer: str = "Unknown"
     model: str = "Unknown"
+    # Excel: Device Data — new fields
+    num_processors: str = "Unknown"    # Excel: number of processors
+    processor_type: str = "Unknown"    # Excel: processor type
+    bios_version: str = "Unknown"      # Excel: bios version
+    bios_date: str = "Unknown"         # Excel: bios date
+    asset_tag: str = "Unknown"         # Excel: asset tag
+    last_boot_time: str = "Unknown"    # Excel: last boot time
+    domain: str = "Unknown"            # Excel: domain
+    domain_role: str = "Unknown"       # Excel: domain role
+    description: str = "Unknown"       # Excel: description
+    memory_slots: str = "Unknown"      # Excel: memory slot count, current size, max size
+    last_backup_time: str = "Unknown"  # Excel: last backup time
+    # Nested lists
+    gpu_details: List[Union[GpuInfo, dict]] = []
     network_adapters: List[Union[NetworkAdapter, dict]] = []
     peripherals: List[Union[Peripheral, dict]] = []
     disk_partitions: List[Union[DiskPartition, dict]] = []
+    disk_details: List[Union[DiskInfo, dict]] = []  # Excel: Disk Information
 
-    @validator("cpu", "ram", "disk", "serial_number", "manufacturer", "model", pre=True, always=True, allow_reuse=True)
+    @validator(
+        "cpu", "ram", "disk", "serial_number", "manufacturer", "model",
+        "num_processors", "processor_type", "bios_version", "bios_date",
+        "asset_tag", "last_boot_time", "domain", "domain_role", "description",
+        "memory_slots", "last_backup_time",
+        pre=True, always=True, allow_reuse=True
+    )
     def normalize_str(cls, v):
         return clean_string(v, "Unknown")
 
-    @validator("gpu_details", "network_adapters", "peripherals", "disk_partitions", pre=True, always=True, allow_reuse=True)
+    @validator("gpu_details", "network_adapters", "peripherals", "disk_partitions", "disk_details", pre=True, always=True, allow_reuse=True)
     def coerce_list(cls, v):
         if v is None:
             return []
@@ -230,8 +308,14 @@ class NetworkDetails(BaseModel):
 
 
 class UserAccount(BaseModel):
+    # Excel: Users (all 7 fields)
     name: str = "Unknown"
     disabled: str = "Unknown"
+    home_directory: str = "Unknown"    # Excel: home directory
+    last_login: str = "Unknown"        # Excel: last login
+    num_logins: str = "0"              # Excel: number of logins
+    user_type: str = "Unknown"         # Excel: user type (Local/Domain/Admin)
+    is_current: str = "False"          # Excel: current user
 
     @validator("*", pre=True, allow_reuse=True)
     def normalize(cls, v):
@@ -263,11 +347,13 @@ class PrinterData(BaseModel):
 
 
 class SoftwareEntry(BaseModel):
+    # Excel: Software Assets (all 8 fields — last 3 are calculated server-side)
     name: str = ""
     version: str = "Unknown"
     publisher: str = "Unknown"
     install_date: str = "Unknown"
     size_mb: str = "Unknown"
+    last_used: str = "Unknown"         # Excel: Last Used
 
     @validator("*", pre=True, allow_reuse=True)
     def normalize(cls, v):
@@ -320,16 +406,22 @@ class AuditData(BaseModel):
 
 
 class AssetMetadata(BaseModel):
+    # Excel: Lifecycle (all 11 fields) + extras
     device_id: str
     asset_tag: str = ""
-    owner: str = ""
+    owner: str = ""                    # Excel: Owner
     department: str = ""
     location: str = ""
-    purchase_date: str = ""
-    purchase_price: str = ""
-    warranty_expiry: str = ""
-    life_cycle_stage: str = "Active"
-    vendor: str = ""
+    vendor: str = ""                   # Excel: Vendor
+    status: str = "Active"             # Excel: Status
+    warranty_start_date: str = ""      # Excel: Warranty Start Date
+    warranty_expiry: str = ""          # Excel: Warranty End Date
+    warranty_notes: str = ""           # Excel: Warranty notes
+    warranty_provider: str = ""        # Excel: Warranty Provider
+    purchase_price: str = ""           # Excel: Purchase price
+    purchase_date: str = ""            # Excel: Purchase Date
+    supplier: str = ""                 # Excel: Supplier
+    po_number: str = ""                # Excel: Purchase Order (PO) Number
     notes: str = ""
     last_updated: str = ""
 
@@ -1334,7 +1426,7 @@ def network_scan(request: NetworkScanRequest):
 
 class WifiConnectRequest(BaseModel):
     ssid: str
-    password: str
+    password: str = ""
 
 
 def _is_windows() -> bool:
@@ -1471,6 +1563,20 @@ def get_wifi_networks():
     return {"networks": result, "total": len(result)}
 
 
+@app.get("/wifi/known-networks")
+def get_known_networks():
+    """Return list of SSIDs for which a password has been saved."""
+    return {"networks": list(wifi_passwords.keys())}
+
+
+@app.delete("/wifi/known-networks/{ssid}")
+def forget_network(ssid: str):
+    """Remove a saved WiFi password."""
+    wifi_passwords.pop(ssid, None)
+    _save_wifi_passwords()
+    return {"status": "ok"}
+
+
 @app.get("/wifi/current")
 def get_current_wifi():
     """Return the current WiFi connection info including derived /24 subnet."""
@@ -1574,8 +1680,16 @@ def connect_wifi(req: WifiConnectRequest):
 
     if not ssid:
         raise HTTPException(status_code=400, detail="SSID cannot be empty.")
+    # Use stored password if caller did not provide one
+    if not password and ssid in wifi_passwords:
+        password = wifi_passwords[ssid]
     if password and len(password) < 8:
         raise HTTPException(status_code=400, detail="WiFi password must be at least 8 characters.")
+
+    def _persist_password():
+        if password:
+            wifi_passwords[ssid] = password
+            _save_wifi_passwords()
 
     # ── macOS ──────────────────────────────────────────────────────────────────
     if system == "Darwin":
@@ -1593,8 +1707,10 @@ def connect_wifi(req: WifiConnectRequest):
             time.sleep(1)
             cur = get_current_wifi()
             if cur.get("connected") and cur.get("ssid") == ssid and cur.get("ip"):
+                _persist_password()
                 return {"status": "connected", "ssid": ssid,
                         "ip": cur["ip"], "subnet": cur["subnet"]}
+        _persist_password()
         return {"status": "connecting", "ssid": ssid,
                 "message": "Connection initiated. Waiting for IP."}
 
@@ -1609,8 +1725,10 @@ def connect_wifi(req: WifiConnectRequest):
             time.sleep(1)
             cur = get_current_wifi()
             if cur.get("connected") and cur.get("ssid") == ssid and cur.get("ip"):
+                _persist_password()
                 return {"status": "connected", "ssid": ssid,
                         "ip": cur["ip"], "subnet": cur["subnet"]}
+        _persist_password()
         return {"status": "connecting", "ssid": ssid,
                 "message": "Connection initiated. Waiting for IP."}
 
@@ -1668,6 +1786,7 @@ def connect_wifi(req: WifiConnectRequest):
             time.sleep(1)
             cur = get_current_wifi()
             if cur.get("connected") and cur.get("ssid") == ssid and cur.get("ip"):
+                _persist_password()
                 return {
                     "status": "connected",
                     "ssid":   ssid,
@@ -1675,6 +1794,7 @@ def connect_wifi(req: WifiConnectRequest):
                     "subnet": cur["subnet"],
                 }
 
+        _persist_password()
         return {
             "status":  "connecting",
             "ssid":    ssid,
