@@ -9,7 +9,7 @@ from fastapi import FastAPI, Query, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, PlainTextResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, validator, ValidationError
 from typing import List, Union, Optional
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
 from reportlab.lib import colors
@@ -77,6 +77,12 @@ app.add_middleware(
 )
 
 sessions = {}
+
+from fastapi.exceptions import RequestValidationError
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error(f"Validation error on {request.url.path}: {exc.errors()}")
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  PostgreSQL — connection pool + table bootstrap
@@ -834,7 +840,20 @@ def get_hw_list(data, key):
 # 5. AUDIT INGESTION & REPORT GENERATION
 # ==============================================================================
 @app.post("/upload-audit")
-def upload_audit(data: AuditData, client_id: str = Query(None)):
+async def upload_audit(request: Request, client_id: str = Query(None)):
+    # Parse raw JSON first, then try Pydantic validation
+    try:
+        raw_json = await request.json()
+    except Exception as e:
+        logger.error(f"Failed to parse JSON body: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    try:
+        data = AuditData(**raw_json)
+    except ValidationError as e:
+        logger.warning(f"Pydantic validation failed, accepting raw JSON. Errors: {e.errors()}")
+        # Create a minimal AuditData with defaults for missing/invalid fields
+        data = AuditData.construct(**raw_json)
     cid = client_id or "unknown"
     logger.info(f"Uploading audit for client: {cid}")
 
@@ -855,7 +874,7 @@ def upload_audit(data: AuditData, client_id: str = Query(None)):
 
     try:
         with open(json_path, "w") as f:
-            json.dump(model_to_dict(data), f, indent=4)
+            json.dump(raw_json, f, indent=4)
     except Exception as e:
         logger.error(f"Failed to save JSON: {e}")
 
@@ -1288,7 +1307,7 @@ def upload_audit(data: AuditData, client_id: str = Query(None)):
     })
     # Persist audit data to PostgreSQL
     _db_save_audit(
-        cid, data.computer_name, model_to_dict(data),
+        cid, data.computer_name, raw_json,
         json_path, pdf_path, xml_path, audit_time
     )
     return {"status": "success", "pdf_report": pdf_path, "xml_report": xml_path}

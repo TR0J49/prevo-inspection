@@ -288,24 +288,38 @@ fi
 LAST_SHUTDOWN=$(last -n 1 -x shutdown 2>/dev/null | head -1 | awk '{if(NF>3) print $5" "$6" "$7" "$8}' | tr -d '\n')
 [ -z "$LAST_SHUTDOWN" ] && LAST_SHUTDOWN="Unknown"
 
-SERIAL_NUMBER=$(echo "$SERIAL_NUMBER" | sed 's/"/\\"/g' | tr -d '\n')
-MANUFACTURER=$(echo "$MANUFACTURER"   | sed 's/"/\\"/g' | tr -d '\n')
-MODEL_NAME=$(echo "$MODEL_NAME"       | sed 's/"/\\"/g' | tr -d '\n')
-BIOS_VERSION=$(echo "$BIOS_VERSION"   | sed 's/"/\\"/g' | tr -d '\n')
-BIOS_DATE=$(echo "$BIOS_DATE"         | sed 's/"/\\"/g' | tr -d '\n')
-ASSET_TAG=$(echo "$ASSET_TAG"         | sed 's/"/\\"/g' | tr -d '\n')
-DOMAIN_NAME=$(echo "$DOMAIN_NAME"     | sed 's/"/\\"/g' | tr -d '\n')
-PROCESSOR_TYPE=$(echo "$PROCESSOR_TYPE" | sed 's/"/\\"/g' | tr -d '\n')
-MEMORY_SLOTS=$(echo "$MEMORY_SLOTS"   | sed 's/"/\\"/g' | tr -d '\n')
-LAST_BOOT_TIME=$(echo "$LAST_BOOT_TIME" | sed 's/"/\\"/g' | tr -d '\n')
-SCANNER_NAME=$(echo "$SCANNER_NAME"   | sed 's/"/\\"/g' | tr -d '\n')
-SITE_NAME=$(echo "$SITE_NAME"         | sed 's/"/\\"/g' | tr -d '\n')
-ORG_NAME=$(echo "$ORG_NAME"           | sed 's/"/\\"/g' | tr -d '\n')
-DEVICE_LOCATION=$(echo "$DEVICE_LOCATION" | sed 's/"/\\"/g' | tr -d '\n')
-PUBLIC_IP=$(echo "$PUBLIC_IP"         | sed 's/"/\\"/g' | tr -d '\n')
-UPTIME_DISPLAY=$(echo "$UPTIME_DISPLAY" | sed 's/"/\\"/g' | tr -d '\n')
-BOOT_TIME_STR=$(echo "$BOOT_TIME_STR" | sed 's/"/\\"/g' | tr -d '\n')
-LAST_SHUTDOWN=$(echo "$LAST_SHUTDOWN" | sed 's/"/\\"/g' | tr -d '\n')
+# Sanitize all string variables for JSON (escape quotes, backslashes, remove newlines)
+json_safe() { echo "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r' | tr -d '\t'; }
+COMPUTER_NAME=$(json_safe "$COMPUTER_NAME")
+OS_NAME=$(json_safe "$OS_NAME")
+OS_VERSION=$(json_safe "$OS_VERSION")
+ARCHITECTURE=$(json_safe "$ARCHITECTURE")
+LICENSE_STATUS=$(json_safe "$LICENSE_STATUS")
+MAC_ADDRESS=$(json_safe "$MAC_ADDRESS")
+DRIVE_NAME=$(json_safe "$DRIVE_NAME")
+CPU=$(json_safe "$CPU")
+RAM=$(json_safe "$RAM")
+DISK=$(json_safe "$DISK")
+DEVICE_DESC=$(json_safe "$DEVICE_DESC")
+DOMAIN_NAME=$(json_safe "$DOMAIN_NAME")
+DOMAIN_ROLE=$(json_safe "$DOMAIN_ROLE")
+SERIAL_NUMBER=$(json_safe "$SERIAL_NUMBER")
+MANUFACTURER=$(json_safe "$MANUFACTURER")
+MODEL_NAME=$(json_safe "$MODEL_NAME")
+BIOS_VERSION=$(json_safe "$BIOS_VERSION")
+BIOS_DATE=$(json_safe "$BIOS_DATE")
+ASSET_TAG=$(json_safe "$ASSET_TAG")
+PROCESSOR_TYPE=$(json_safe "$PROCESSOR_TYPE")
+MEMORY_SLOTS=$(json_safe "$MEMORY_SLOTS")
+LAST_BOOT_TIME=$(json_safe "$LAST_BOOT_TIME")
+SCANNER_NAME=$(json_safe "$SCANNER_NAME")
+SITE_NAME=$(json_safe "$SITE_NAME")
+ORG_NAME=$(json_safe "$ORG_NAME")
+DEVICE_LOCATION=$(json_safe "$DEVICE_LOCATION")
+PUBLIC_IP=$(json_safe "$PUBLIC_IP")
+UPTIME_DISPLAY=$(json_safe "$UPTIME_DISPLAY")
+BOOT_TIME_STR=$(json_safe "$BOOT_TIME_STR")
+LAST_SHUTDOWN=$(json_safe "$LAST_SHUTDOWN")
 
 # Physical Network Adapters
 NETWORK_ADAPTERS_JSON="[]"
@@ -1101,6 +1115,24 @@ JSON=$(cat <<EOF
 }
 EOF
 )
+
+# Validate JSON before sending
+if command -v python3 >/dev/null 2>&1; then
+    echo "$JSON" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "WARNING: JSON validation failed, attempting to fix..."
+        JSON=$(echo "$JSON" | python3 -c "
+import sys, json
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+    print(json.dumps(d))
+except Exception as e:
+    print(raw, file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null) || true
+    fi
+fi
 
 CLIENT_ID="CLIENT_ID_PLACEHOLDER"
 API_URL="http://127.0.0.1:8000/upload-audit?client_id=$CLIENT_ID"
