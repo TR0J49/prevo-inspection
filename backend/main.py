@@ -2122,22 +2122,22 @@ def connect_wifi(req: WifiConnectRequest):
                 pass
 
 
-def _get_netbios_username(ip_str: str) -> str:
+def _get_netbios_info(ip_str: str) -> dict:
     """
-    Query NetBIOS Name Service (port 137) to find the logged-in username.
-    Uses 'nbtstat -a' on Windows, 'nmblookup -A' on macOS/Linux.
-    Returns the username string, or "" if unavailable.
-    nbtstat output: <00>=computer  <03>=messenger (username)  <20>=file server
-    The <03> UNIQUE entry that differs from the computer name is the logged-in user.
+    Query NetBIOS Name Service (port 137) via nbtstat/nmblookup.
+    Returns {"hostname": "...", "username": "..."} — empty strings if unavailable.
+    nbtstat output rows:  <00> UNIQUE = computer name
+                          <03> UNIQUE = messenger (logged-in user if != computer name)
+                          <20> UNIQUE = file server service
     """
+    result = {"hostname": "", "username": ""}
     try:
-        sys = platform.system()
-        if sys == "Windows":
-            flags = 0x08000000  # CREATE_NO_WINDOW
+        sys_name = platform.system()
+        if sys_name == "Windows":
             r = subprocess.run(
                 ["nbtstat", "-a", ip_str],
                 capture_output=True, text=True, timeout=4,
-                creationflags=flags,
+                creationflags=0x08000000,   # CREATE_NO_WINDOW
             )
             output = r.stdout
         else:
@@ -2147,31 +2147,33 @@ def _get_netbios_username(ip_str: str) -> str:
             )
             output = r.stdout
 
+        # Pass 1: get computer name (<00> UNIQUE)
         computer_name = None
         for line in output.splitlines():
-            stripped = line.strip()
-            # Pick up the computer name first (<00> UNIQUE)
-            if "<00>" in stripped and "UNIQUE" in stripped:
-                parts = stripped.split()
+            s = line.strip()
+            if "<00>" in s and "UNIQUE" in s:
+                parts = s.split()
                 if parts:
-                    computer_name = parts[0].strip().upper()
+                    computer_name = parts[0].strip()
+                    result["hostname"] = computer_name
                     break
 
+        # Pass 2: get logged-in username (<03> UNIQUE, different from computer name)
         for line in output.splitlines():
-            stripped = line.strip()
-            if "<03>" in stripped and "UNIQUE" in stripped:
-                parts = stripped.split()
+            s = line.strip()
+            if "<03>" in s and "UNIQUE" in s:
+                parts = s.split()
                 if not parts:
                     continue
                 name = parts[0].strip()
-                # Skip entries that match the computer name (messenger on computer itself)
-                if computer_name and name.upper() == computer_name:
+                if computer_name and name.upper() == computer_name.upper():
                     continue
                 if name and name not in ("", "__MSBROWSE__"):
-                    return name
+                    result["username"] = name
+                    break
     except Exception:
         pass
-    return ""
+    return result
 
 
 @app.get("/wifi/scan-devices")
@@ -2264,7 +2266,7 @@ def wifi_scan_devices(subnet: str = Query(None)):
                 pass
 
     # Enrich each discovered device — audited first pass
-    unaudited_windows = []   # (device, ip) pairs that need nbtstat lookup
+    unaudited_devices = []
     for device in scan_result["discovered"]:
         ip = device["ip"]
         if ip in audit_index:
@@ -2281,19 +2283,18 @@ def wifi_scan_devices(subnet: str = Query(None)):
             device["username"]      = "—"
             device["last_audit"]    = ""
             device["audit_status"]  = "unaudited"
-            # Queue Windows devices for nbtstat username lookup
-            open_ports = device.get("open_ports", [])
-            if any(p in open_ports for p in (135, 445, 3389)):
-                unaudited_windows.append(device)
+            unaudited_devices.append(device)
 
-    # Concurrently query NetBIOS usernames for unaudited Windows hosts
-    if unaudited_windows:
+    # Concurrently query NetBIOS for hostname + username on all unaudited devices
+    if unaudited_devices:
         def _enrich_netbios(dev):
-            name = _get_netbios_username(dev["ip"])
-            if name:
-                dev["username"] = name
+            info = _get_netbios_info(dev["ip"])
+            if info["hostname"]:
+                dev["computer_name"] = info["hostname"]
+            if info["username"]:
+                dev["username"] = info["username"]
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
-            list(ex.map(_enrich_netbios, unaudited_windows))
+            list(ex.map(_enrich_netbios, unaudited_devices))
 
     return scan_result
 
