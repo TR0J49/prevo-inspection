@@ -915,26 +915,26 @@ try:
             apps.append({'name': parts[0].strip(), 'version': parts[1].strip(),
                          'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str,
                          'last_used': get_last_used(parts[0].strip())})
-    if apps:
-        print(json.dumps(apps))
-        exit()
-except:
+except Exception:
     pass
-try:
-    r = subprocess.run(
-        ['rpm', '-qa', '--queryformat', '%{NAME}|%{VERSION}|%{SIZE}\n'],
-        capture_output=True, text=True, timeout=15
-    )
-    for line in r.stdout.strip().split('\n')[:150]:
-        parts = line.split('|')
-        if len(parts) >= 2 and parts[0].strip():
-            size_b = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 0
-            size_str = f"{round(size_b/1048576,2)} MB" if size_b > 0 else "Unknown"
-            apps.append({'name': parts[0].strip(), 'version': parts[1].strip(),
-                         'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str,
-                         'last_used': get_last_used(parts[0].strip())})
-except:
-    pass
+# Only fall back to rpm when dpkg found nothing (rpm-based distro).
+if not apps:
+    try:
+        r = subprocess.run(
+            ['rpm', '-qa', '--queryformat', '%{NAME}|%{VERSION}|%{SIZE}\n'],
+            capture_output=True, text=True, timeout=15
+        )
+        for line in r.stdout.strip().split('\n')[:150]:
+            parts = line.split('|')
+            if len(parts) >= 2 and parts[0].strip():
+                size_b = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 0
+                size_str = f"{round(size_b/1048576,2)} MB" if size_b > 0 else "Unknown"
+                apps.append({'name': parts[0].strip(), 'version': parts[1].strip(),
+                             'publisher': '', 'install_date': 'Unknown', 'size_mb': size_str,
+                             'last_used': get_last_used(parts[0].strip())})
+    except Exception:
+        pass
+# Exactly one print — emitting twice produces a malformed payload.
 print(json.dumps(apps))
 PYEOF
 )
@@ -1059,6 +1059,53 @@ fi
 # ────────────────────────────────────────────────────────────────────────────
 #  Build Final JSON Payload
 # ────────────────────────────────────────────────────────────────────────────
+# Each fragment above is produced by a separate collector. If one emits nothing
+# (missing tool, python error) or malformed output, splicing it straight into the
+# template yields invalid JSON and the whole audit is lost. Validate each one and
+# substitute a safe default so a single failed collector only costs its section.
+json_fragment() {
+    _frag="$1"; _fallback="$2"
+    if [ -z "$_frag" ]; then printf '%s' "$_fallback"; return; fi
+    if ! command -v python3 >/dev/null 2>&1; then printf '%s' "$_frag"; return; fi
+    _out=$(printf '%s' "$_frag" | python3 -c "
+import sys, json
+raw = sys.stdin.read()
+try:
+    sys.stdout.write(json.dumps(json.loads(raw)))
+except Exception:
+    # A collector that printed more than once leaves several documents stacked up;
+    # keep the first parsable one rather than discarding the section entirely.
+    for chunk in raw.splitlines():
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            sys.stdout.write(json.dumps(json.loads(chunk)))
+            break
+        except Exception:
+            continue
+" 2>/dev/null)
+    if [ -n "$_out" ]; then printf '%s' "$_out"; else printf '%s' "$_fallback"; fi
+}
+
+HOTFIXES_JSON=$(json_fragment "$HOTFIXES_JSON" "[]")
+COMPRESSION_UTILITIES=$(json_fragment "$COMPRESSION_UTILITIES" "[]")
+ANTIVIRUS=$(json_fragment "$ANTIVIRUS" "[]")
+PRINTERS=$(json_fragment "$PRINTERS" "[]")
+GPU_JSON=$(json_fragment "$GPU_JSON" "[]")
+NETWORK_ADAPTERS_JSON=$(json_fragment "$NETWORK_ADAPTERS_JSON" "[]")
+PERIPHERALS_JSON=$(json_fragment "$PERIPHERALS_JSON" "[]")
+DISK_PARTITIONS_JSON=$(json_fragment "$DISK_PARTITIONS_JSON" "[]")
+DISK_DETAILS_JSON=$(json_fragment "$DISK_DETAILS_JSON" "[]")
+NETWORK_DETAILS=$(json_fragment "$NETWORK_DETAILS" "[]")
+USER_ACCOUNTS=$(json_fragment "$USER_ACCOUNTS" "[]")
+SOFTWARE_INVENTORY_JSON=$(json_fragment "$SOFTWARE_INVENTORY_JSON" "[]")
+LOGIN_HISTORY_JSON=$(json_fragment "$LOGIN_HISTORY_JSON" "[]")
+# Interpolated unquoted as a number — an empty value would break the object.
+case "$UPTIME_SECS_TOTAL" in
+    ''|*[!0-9]*) UPTIME_SECS_TOTAL=0 ;;
+esac
+
 JSON=$(cat <<EOF
 {
     "execution_datetime": "$EXECUTION_DATETIME",
@@ -1116,21 +1163,26 @@ JSON=$(cat <<EOF
 EOF
 )
 
-# Validate JSON before sending
+# Validate the assembled payload before sending. Never overwrite $JSON here — a
+# failed "repair" used to blank it out, which uploaded an empty body and surfaced
+# as a confusing HTTP 422 instead of the real problem.
 if command -v python3 >/dev/null 2>&1; then
-    echo "$JSON" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null
-    if [ $? -ne 0 ]; then
-        echo "WARNING: JSON validation failed, attempting to fix..."
-        JSON=$(echo "$JSON" | python3 -c "
+    JSON_ERR=$(printf '%s' "$JSON" | python3 -c "
 import sys, json
-raw = sys.stdin.read()
 try:
-    d = json.loads(raw)
-    print(json.dumps(d))
+    json.loads(sys.stdin.read())
 except Exception as e:
-    print(raw, file=sys.stderr)
-    sys.exit(1)
-" 2>/dev/null) || true
+    sys.stdout.write(str(e))
+" 2>/dev/null)
+    if [ -n "$JSON_ERR" ]; then
+        echo "ERROR: Collected data did not form valid JSON — nothing was uploaded."
+        echo "Details: $JSON_ERR"
+        printf '%s' "$JSON" > /tmp/audit_payload_invalid.json 2>/dev/null &&
+            echo "The payload was saved to /tmp/audit_payload_invalid.json for review."
+        echo ""
+        echo "Press enter to exit..."
+        read -r
+        exit 1
     fi
 fi
 

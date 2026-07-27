@@ -205,7 +205,15 @@ def _session_get(client_id: str) -> dict:
                     cur.execute("SELECT * FROM sessions WHERE client_id = %s", (client_id,))
                     row = cur.fetchone()
                     if row:
-                        return dict(row)
+                        session = dict(row)
+                        # created_at/updated_at are TIMESTAMPTZ and come back as
+                        # datetime objects, which JSONResponse cannot encode —
+                        # /check-status would 500 and the frontend poll never
+                        # reaches the download links.
+                        for key, value in session.items():
+                            if isinstance(value, datetime):
+                                session[key] = value.isoformat()
+                        return session
         except Exception as e:
             logger.error(f"DB session_get: {e}")
     return sessions.get(client_id, {"status": "pending"})
@@ -1603,7 +1611,8 @@ def get_software_for_device(computer_name: str):
         "user_accounts":      latest_data.get("user_accounts", []),
         "login_history":      latest_data.get("login_history", []),
         "hotfixes":           latest_data.get("hotfixes", []),
-        "antivirus":          latest_data.get("antivirus", "")
+        "antivirus":          latest_data.get("antivirus", ""),
+        "printers":           latest_data.get("printers", [])
     }
 
 

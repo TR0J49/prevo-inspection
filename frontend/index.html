@@ -1349,6 +1349,7 @@
                     <button class="btn btn-sm btn-outline" id="dtab-storage" onclick="switchDeviceTab('storage')" style="border-radius:8px 8px 0 0;">Storage</button>
                     <button class="btn btn-sm btn-outline" id="dtab-network" onclick="switchDeviceTab('network')" style="border-radius:8px 8px 0 0;">Network</button>
                     <button class="btn btn-sm btn-outline" id="dtab-peripherals" onclick="switchDeviceTab('peripherals')" style="border-radius:8px 8px 0 0;">Peripherals</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-printers" onclick="switchDeviceTab('printers')" style="border-radius:8px 8px 0 0;">Printers</button>
                     <button class="btn btn-sm btn-outline" id="dtab-gpu" onclick="switchDeviceTab('gpu')" style="border-radius:8px 8px 0 0;">Video/GPU</button>
                     <button class="btn btn-sm btn-outline" id="dtab-users" onclick="switchDeviceTab('users')" style="border-radius:8px 8px 0 0;">Users</button>
                     <button class="btn btn-sm btn-outline" id="dtab-logins" onclick="switchDeviceTab('logins')" style="border-radius:8px 8px 0 0;">Logins</button>
@@ -1447,6 +1448,10 @@
                         <div>
                             <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">License Status</div>
                             <div id="specLicenseVal" style="font-size:14px; font-weight:500;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Printers</div>
+                            <div id="specPrinters" style="font-size:14px; font-weight:500;">—</div>
                         </div>
                     </div>
                 </div>
@@ -1592,6 +1597,33 @@
                             </thead>
                             <tbody id="peripheralsBody">
                                 <tr><td colspan="6" style="text-align:center; color:var(--muted);">No peripheral data available</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: Printers -->
+            <div id="dpanel-printers" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
+                        <div class="card-title" style="margin-bottom:0;">Connected Printer Details</div>
+                        <span class="badge badge-blue" id="printerTotalBadge">0 printers</span>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Printer Name</th>
+                                    <th>System Name</th>
+                                    <th>Port Name</th>
+                                    <th>Status</th>
+                                    <th>Bidirectional</th>
+                                </tr>
+                            </thead>
+                            <tbody id="printerDetailsBody">
+                                <tr><td colspan="6" style="text-align:center; color:var(--muted);">No printer data available</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2781,6 +2813,34 @@ async function loadSoftwareForDevice() {
             periphBody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--muted);">No peripheral data available</td></tr>';
         }
 
+        // --- Printers tab (Excel: name, system name, port, status, bidi) ---
+        const printers = data.printers || [];
+        const printerBody = document.getElementById('printerDetailsBody');
+        document.getElementById('printerTotalBadge').textContent =
+            `${printers.length} printer${printers.length === 1 ? '' : 's'}`;
+        if (printers.length) {
+            printerBody.innerHTML = printers.map((p, i) => {
+                // Older audits / bash script may store a printer as a plain string
+                const pr = (typeof p === 'string') ? { name: p } : (p || {});
+                const st = printerStatusText(pr.extended_printer_status);
+                const bidi = String(pr.enable_bidi || '').toLowerCase() === 'true';
+                return `<tr>
+                    <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
+                    <td><b>${esc(pr.name || '—')}</b></td>
+                    <td>${esc(pr.system_name || '—')}</td>
+                    <td class="td-mono" style="font-size:12px;">${esc(pr.port_name || '—')}</td>
+                    <td><span class="badge badge-${st.tone}">${esc(st.label)}</span></td>
+                    <td>${bidi ? '<span class="badge badge-green">Yes</span>' : '<span class="badge badge-orange">No</span>'}</td>
+                </tr>`;
+            }).join('');
+        } else {
+            printerBody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--muted);">No printers connected to this system</td></tr>';
+        }
+        // Overview summary line
+        document.getElementById('specPrinters').textContent = printers.length
+            ? `${printers.length} connected`
+            : 'Not Installed';
+
         // --- GPU tab ---
         const gpus = hw.gpu_details || [];
         const gpuBody = document.getElementById('gpuDetailsBody');
@@ -2930,8 +2990,37 @@ async function loadChangeReport(deviceName) {
     }
 }
 
+// Win32_Printer.ExtendedPrinterStatus is a numeric code — map it to a readable label.
+function printerStatusText(code) {
+    const map = {
+        '1':  ['Other',            'blue'],
+        '2':  ['Unknown',          'orange'],
+        '3':  ['Idle',             'green'],
+        '4':  ['Printing',         'blue'],
+        '5':  ['Warming Up',       'blue'],
+        '6':  ['Stopped Printing', 'orange'],
+        '7':  ['Offline',          'orange'],
+        '8':  ['Paused',           'orange'],
+        '9':  ['Error',            'orange'],
+        '10': ['Busy',             'blue'],
+        '11': ['Not Available',    'orange'],
+        '12': ['Waiting',          'blue'],
+        '13': ['Processing',       'blue'],
+        '14': ['Initialization',   'blue'],
+        '15': ['Power Save',       'purple'],
+        '16': ['Pending Deletion', 'orange'],
+        '17': ['I/O Active',       'blue'],
+        '18': ['Manual Feed',      'orange'],
+    };
+    const key = String(code == null ? '' : code).trim();
+    if (map[key]) return { label: map[key][0], tone: map[key][1] };
+    // Non-Windows audits may already send a text status
+    if (key && key !== '0') return { label: key, tone: 'blue' };
+    return { label: 'Unknown', tone: 'orange' };
+}
+
 function switchDeviceTab(tab) {
-    const tabs = ['overview','hardware','storage','network','peripherals','gpu','users','logins','software','lifecycle'];
+    const tabs = ['overview','hardware','storage','network','peripherals','printers','gpu','users','logins','software','lifecycle'];
     tabs.forEach(t => {
         const panel = document.getElementById('dpanel-' + t);
         const btn   = document.getElementById('dtab-' + t);
