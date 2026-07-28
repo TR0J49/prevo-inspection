@@ -120,9 +120,25 @@ if ($antivirus.Count -eq 0) { $antivirus = @("Windows Defender") }
 # 9. Connected Printer Details
 $printers = @()
 try {
+    # Virtual / redirector queues to skip. These are anchored rather than matched as
+    # bare substrings: "Fax" on its own is the Windows fax queue, but plenty of real
+    # multifunction printers carry it in their name (e.g. "Brother MFC-L2750DW Fax")
+    # and an unanchored match silently dropped them, reporting zero printers.
+    $virtualPrinterPattern = @(
+        '^Microsoft Print to PDF$'
+        '^Microsoft XPS Document Writer$'
+        '^Fax$'
+        '^Microsoft Shared Fax Driver$'
+        '^OneNote'
+        '^Send To OneNote'
+        '^Send to Microsoft'
+        '^Root Print Queue$'
+        '^AnyDesk Printer$'
+    ) -join '|'
+
     $printerObjects = Get-CimInstance Win32_Printer -ErrorAction Stop | Where-Object {
-        $_.Name -notmatch "Microsoft Print to PDF|Microsoft XPS Document Writer|OneNote|Fax|Root Print|Send to Microsoft|AnyDesk" -and
-        $_.PortName -notmatch "PORTPROMPT:|SHRFAX:|nul:"
+        $_.Name -notmatch $virtualPrinterPattern -and
+        $_.PortName -notmatch '^(PORTPROMPT:|SHRFAX:|nul:)$'
     }
     foreach ($p in $printerObjects) {
         $printers += @{

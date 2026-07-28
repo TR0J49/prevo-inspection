@@ -688,7 +688,10 @@ def check_status(client_id: str = Query(...)):
 def download_script(request: Request, client_id: str = Query(...)):
     base_url = str(request.base_url).rstrip("/")
     try:
-        with open(os.path.join(BASE_DIR, "scripts", "audit.ps1"), "r") as f:
+        # Must be explicit: the scripts are UTF-8, but open() defaults to the
+        # locale codec (cp1252 on Windows), which either mojibakes the box-drawing
+        # banners or raises outright on a byte it cannot map.
+        with open(os.path.join(BASE_DIR, "scripts", "audit.ps1"), "r", encoding="utf-8") as f:
             content = f.read()
         content = content.replace("http://127.0.0.1:8000", base_url)
         content = content.replace("CLIENT_ID_PLACEHOLDER", client_id)
@@ -727,7 +730,7 @@ def download_vbs(
 def download_mac_script(request: Request, client_id: str = Query(...)):
     base_url = str(request.base_url).rstrip("/")
     try:
-        with open(os.path.join(BASE_DIR, "scripts", "audit.sh"), "r") as f:
+        with open(os.path.join(BASE_DIR, "scripts", "audit.sh"), "r", encoding="utf-8") as f:
             content = f.read()
         content = content.replace("http://127.0.0.1:8000", base_url)
         content = content.replace("CLIENT_ID_PLACEHOLDER", client_id)
@@ -892,7 +895,7 @@ async def upload_audit(request: Request, client_id: str = Query(None)):
     xml_path  = f"{USER_INFO_DIR}/audit_{cid}_{clean_name}_{timestamp}.xml"
 
     try:
-        with open(json_path, "w") as f:
+        with open(json_path, "w", encoding="utf-8") as f:
             json.dump(raw_json, f, indent=4)
     except Exception as e:
         logger.error(f"Failed to save JSON: {e}")
@@ -1420,7 +1423,7 @@ def save_asset_metadata(metadata: AssetMetadata):
     # file fallback
     path = f"{ASSET_METADATA_DIR}/{metadata.device_id}.json"
     try:
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data_dict, f, indent=4)
         return {"status": "saved", "device_id": metadata.device_id}
     except Exception as e:
@@ -1443,7 +1446,7 @@ def get_asset_metadata(device_id: str):
     path = f"{ASSET_METADATA_DIR}/{device_id}.json"
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Asset not found.")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -1467,7 +1470,7 @@ def update_asset_metadata(device_id: str, metadata: AssetMetadata):
             logger.error(f"DB asset update: {e}")
     # file fallback
     path = f"{ASSET_METADATA_DIR}/{device_id}.json"
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data_dict, f, indent=4)
     return {"status": "updated", "device_id": device_id}
 
@@ -1508,7 +1511,7 @@ def list_assets():
         for fn in os.listdir(ASSET_METADATA_DIR):
             if fn.endswith(".json"):
                 try:
-                    with open(f"{ASSET_METADATA_DIR}/{fn}") as f:
+                    with open(f"{ASSET_METADATA_DIR}/{fn}", encoding="utf-8") as f:
                         assets.append(json.load(f))
                 except Exception:
                     pass
@@ -1546,7 +1549,7 @@ def list_audited_devices():
         for fn in os.listdir(USER_INFO_DIR):
             if fn.endswith(".json") and fn.startswith("audit_"):
                 try:
-                    with open(f"{USER_INFO_DIR}/{fn}") as f:
+                    with open(f"{USER_INFO_DIR}/{fn}", encoding="utf-8") as f:
                         d = json.load(f)
                     name = d.get("computer_name", "Unknown")
                     ts   = d.get("execution_datetime", "")
@@ -1613,7 +1616,7 @@ def get_software_for_device(computer_name: str):
         for fn in os.listdir(USER_INFO_DIR):
             if fn.endswith(".json") and fn.startswith("audit_"):
                 try:
-                    with open(os.path.join(USER_INFO_DIR, fn)) as f:
+                    with open(os.path.join(USER_INFO_DIR, fn), encoding="utf-8") as f:
                         d = json.load(f)
                     if d.get("computer_name", "").lower() == computer_name.lower():
                         audits.append((d.get("execution_datetime", ""), d))
@@ -1703,7 +1706,7 @@ def get_device_diff(computer_name: str):
         for fn in os.listdir(USER_INFO_DIR):
             if fn.endswith(".json") and fn.startswith("audit_"):
                 try:
-                    with open(os.path.join(USER_INFO_DIR, fn)) as f:
+                    with open(os.path.join(USER_INFO_DIR, fn), encoding="utf-8") as f:
                         d = json.load(f)
                     if d.get("computer_name", "").lower() == computer_name.lower():
                         audits.append((d.get("execution_datetime", ""), d))
@@ -2470,7 +2473,7 @@ def wifi_scan_devices(subnet: str = Query(None)):
             if not (fn.endswith(".json") and fn.startswith("audit_")):
                 continue
             try:
-                with open(f"{USER_INFO_DIR}/{fn}") as f:
+                with open(f"{USER_INFO_DIR}/{fn}", encoding="utf-8") as f:
                     d = json.load(f)
                 users    = d.get("user_accounts", [])
                 username = "—"

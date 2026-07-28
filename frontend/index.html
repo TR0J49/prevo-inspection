@@ -507,6 +507,19 @@
             animation: spin 0.7s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Inline spinner sized for buttons — .spinner is 44px, far too large here.
+           Inherits the button's text colour so it works on outline and solid. */
+        .btn-spinner {
+            width: 14px; height: 14px;
+            border: 2px solid currentColor;
+            border-top-color: transparent;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+            animation: spin 0.6s linear infinite;
+        }
+        .btn:disabled { opacity: 0.65; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
         @keyframes pulse-dot { 0%,100%{ opacity:1; box-shadow:0 0 0 0 rgba(34,197,94,0.5); } 50%{ opacity:0.8; box-shadow:0 0 0 6px rgba(34,197,94,0); } }
 
         /* ═══════════════════════════════════════════════════════════════════
@@ -642,6 +655,10 @@
             .tab-btn .tab-label { display: none; }
             .form-grid-3 { grid-template-columns: 1fr; }
             .header-top { padding: 0 16px; }
+            /* Once the device picker wraps, the action beside it should span the
+               row rather than sit as a stub against the edge. */
+            .device-picker-actions { flex: 1 1 100%; }
+            .device-picker-actions .btn { width: 100%; }
         }
     </style>
 </head>
@@ -1319,8 +1336,11 @@
                         <option value="">— Select a device —</option>
                     </select>
                 </div>
-                <div style="display:flex; gap:10px;">
-                    <button class="btn btn-outline" onclick="refreshDeviceList()">🔄 Refresh Devices</button>
+                <div class="device-picker-actions" style="display:flex; gap:10px; flex:0 0 auto;">
+                    <button class="btn btn-outline" id="refreshDevicesBtn" onclick="refreshDeviceList()">
+                        <span id="refreshDevicesIcon">🔄</span>
+                        <span id="refreshDevicesLabel">Refresh Devices</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -2666,12 +2686,29 @@ function exportScanResults() {
 // ────────────────────────────────────────────────────────────────────
 let swData = [];
 
+let _refreshingDevices = false;
+
 async function refreshDeviceList() {
+    // Guard against double-clicks queueing overlapping fetches
+    if (_refreshingDevices) return;
+    _refreshingDevices = true;
+
+    const btn   = document.getElementById('refreshDevicesBtn');
+    const icon  = document.getElementById('refreshDevicesIcon');
+    const label = document.getElementById('refreshDevicesLabel');
+    const sel   = document.getElementById('deviceSelector');
+    const curr  = sel.value;
+
+    if (btn) btn.disabled = true;
+    if (icon) icon.outerHTML = '<span class="btn-spinner" id="refreshDevicesIcon"></span>';
+    if (label) label.textContent = 'Refreshing…';
+    sel.disabled = true;
+
     try {
-        const r    = await fetch('/api/devices');
+        const r = await fetch('/api/devices');
+        if (!r.ok) throw new Error(`Server returned ${r.status}`);
         const data = await r.json();
-        const sel  = document.getElementById('deviceSelector');
-        const curr = sel.value;
+
         sel.innerHTML = '<option value="">— Select a device —</option>';
         (data.devices || []).forEach(d => {
             const opt = document.createElement('option');
@@ -2680,7 +2717,24 @@ async function refreshDeviceList() {
             if (opt.value === curr) opt.selected = true;
             sel.appendChild(opt);
         });
-    } catch(e) { console.error(e); }
+
+        if (label) label.textContent = `Refreshed (${(data.devices || []).length})`;
+        setTimeout(() => { const l = document.getElementById('refreshDevicesLabel');
+                           if (l) l.textContent = 'Refresh Devices'; }, 1600);
+    } catch (e) {
+        console.error(e);
+        // Surface the failure instead of leaving a silently stale list
+        if (label) label.textContent = 'Refresh failed';
+        if (btn) btn.title = e.message || 'Could not reach the server';
+        setTimeout(() => { const l = document.getElementById('refreshDevicesLabel');
+                           if (l) l.textContent = 'Refresh Devices'; }, 2500);
+    } finally {
+        const ic = document.getElementById('refreshDevicesIcon');
+        if (ic) ic.outerHTML = '<span id="refreshDevicesIcon">🔄</span>';
+        if (btn) btn.disabled = false;
+        sel.disabled = false;
+        _refreshingDevices = false;
+    }
 }
 
 async function loadSoftwareForDevice() {

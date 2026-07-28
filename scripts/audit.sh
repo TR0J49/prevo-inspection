@@ -37,7 +37,20 @@ elif command -v ip >/dev/null 2>&1; then
 fi
 [ -z "$MAC_ADDRESS" ] && MAC_ADDRESS="Unknown"
 
+# Optical drive — actually probed rather than assumed absent.
 DRIVE_NAME="No CD Unit Found"
+if [ "$OS_NAME" = "Darwin" ] || [ "$OS_NAME" = "macOS" ]; then
+    _OPTICAL=$(system_profiler SPDiscBurningDataType 2>/dev/null | awk -F': ' '/Model|Name/{print $2; exit}' | sed 's/^ *//')
+    [ -z "$_OPTICAL" ] && _OPTICAL=$(drutil status 2>/dev/null | awk '/Vendor|Product/{print; exit}' | sed 's/^ *//')
+    [ -n "$_OPTICAL" ] && DRIVE_NAME="$_OPTICAL"
+elif [ -d /sys/block ]; then
+    for _d in /sys/block/sr[0-9]*; do
+        [ -e "$_d" ] || continue
+        _m=$(cat "$_d/device/model" 2>/dev/null | sed 's/ *$//')
+        DRIVE_NAME="${_m:-Optical Drive} ($(basename "$_d"))"
+        break
+    done
+fi
 
 # ── Basic Hardware: CPU, RAM, Disk ────────────────────────────────────────────
 CPU="Unknown"
@@ -70,7 +83,10 @@ fi
 
 # ── Network Details ───────────────────────────────────────────────────────────
 IP_ADDRESS="Unknown"
-if [ "$OS_NAME" = "Darwin" ]; then
+# NOTE: OS_NAME is normalised to "macOS" above, so this must not test "Darwin" —
+# doing so made the macOS branch dead code and it only worked via the ifconfig
+# fallback further down.
+if [ "$OS_NAME" = "macOS" ]; then
     # macOS: hostname -I is not available; use ipconfig per-interface
     IP_ADDRESS=$(ipconfig getifaddr en0 2>/dev/null)
     [ -z "$IP_ADDRESS" ] && IP_ADDRESS=$(ipconfig getifaddr en1 2>/dev/null)
@@ -82,7 +98,17 @@ if [ -z "$IP_ADDRESS" ] && command -v ifconfig >/dev/null 2>&1; then
 fi
 [ -z "$IP_ADDRESS" ] && IP_ADDRESS="Unknown"
 
-NETWORK_DETAILS="[{\"ip_address\": \"$IP_ADDRESS\", \"gateway\": \"Unknown\", \"mac\": \"$MAC_ADDRESS\"}]"
+# Default gateway — was hardcoded "Unknown" for every platform
+GATEWAY="Unknown"
+if [ "$OS_NAME" = "macOS" ]; then
+    GATEWAY=$(route -n get default 2>/dev/null | awk -F': ' '/gateway/{print $2; exit}' | tr -d ' ')
+else
+    GATEWAY=$(ip route show default 2>/dev/null | awk '/default/{print $3; exit}')
+    [ -z "$GATEWAY" ] && GATEWAY=$(netstat -rn 2>/dev/null | awk '/^0.0.0.0|^default/{print $2; exit}')
+fi
+[ -z "$GATEWAY" ] && GATEWAY="Unknown"
+
+NETWORK_DETAILS="[{\"ip_address\": \"$IP_ADDRESS\", \"gateway\": \"$GATEWAY\", \"mac\": \"$MAC_ADDRESS\"}]"
 
 # User Accounts (all Excel fields)
 USER_ACCOUNTS="[]"
@@ -184,41 +210,160 @@ if [ "$OS_NAME" = "macOS" ]; then
     SERIAL_NUMBER=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Serial Number \(system\)/{print $2}' | head -1 | sed 's/^ *//')
     MANUFACTURER="Apple Inc."
     MODEL_NAME=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Model Name/{print $2}' | head -1 | sed 's/^ *//')
-    NUM_PROCESSORS=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Number of Processors/{print $2}' | head -1 | sed 's/^ *//')
-    PROCESSOR_TYPE=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Processor Name/{print $2}' | head -1 | sed 's/^ *//')
-    MEMORY_SLOTS=$(system_profiler SPMemoryDataType 2>/dev/null | awk -F': ' '/Size/{print $2}' | paste -sd',' - 2>/dev/null | head -c 200)
-    LAST_BOOT_TIME=$(sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = //' | sed 's/,.*//' | xargs -I{} python3 -c "import datetime; print(datetime.datetime.fromtimestamp({}).strftime('%Y-%m-%d %H:%M:%S'))" 2>/dev/null)
+    # sysctl works on both Intel and Apple Silicon. The SPHardwareDataType keys
+    # "Number of Processors" / "Processor Name" only exist on Intel Macs — on
+    # Apple Silicon they are absent (it reports "Chip" / "Total Number of Cores"),
+    # which left both fields Unknown on every M-series machine.
+    NUM_PROCESSORS=$(sysctl -n hw.physicalcpu 2>/dev/null)
+    [ -z "$NUM_PROCESSORS" ] && NUM_PROCESSORS=$(sysctl -n hw.ncpu 2>/dev/null)
+    [ -z "$NUM_PROCESSORS" ] && NUM_PROCESSORS=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Total Number of Cores|Number of Processors/{print $2}' | head -1 | sed 's/^ *//')
+
+    PROCESSOR_TYPE=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
+    [ -z "$PROCESSOR_TYPE" ] && PROCESSOR_TYPE=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/^ *Chip|Processor Name/{print $2}' | head -1 | sed 's/^ *//')
+    [ -z "$PROCESSOR_TYPE" ] && PROCESSOR_TYPE="Unknown"
+    [ -z "$NUM_PROCESSORS" ] && NUM_PROCESSORS="Unknown"
+    # Intel Macs list per-DIMM "Size:". Apple Silicon has soldered unified memory and
+    # reports "Memory:" / "Type:" instead, which left this field empty.
+    MEMORY_SLOTS=$(system_profiler SPMemoryDataType 2>/dev/null | awk -F': ' '/ Size:/{print $2}' | paste -sd',' - 2>/dev/null | head -c 200)
+    if [ -z "$MEMORY_SLOTS" ]; then
+        _MEM_TOTAL=$(system_profiler SPMemoryDataType 2>/dev/null | awk -F': ' '/ Memory:/{print $2; exit}' | sed 's/^ *//')
+        _MEM_TYPE=$(system_profiler SPMemoryDataType 2>/dev/null | awk -F': ' '/ Type:/{print $2; exit}' | sed 's/^ *//')
+        [ -z "$_MEM_TOTAL" ] && _MEM_TOTAL="$RAM"
+        MEMORY_SLOTS="Unified memory (soldered) — ${_MEM_TOTAL}${_MEM_TYPE:+ $_MEM_TYPE}"
+    fi
+
+    # Apple firmware exposes a version but never a release date — say so rather
+    # than leaving a bare "Unknown" that reads like a collection failure.
+    BIOS_DATE="Not Applicable (Apple firmware)"
+    # `sysctl -n kern.boottime` prints:  { sec = 1753600000, usec = 123456 } Mon Jul 28 ...
+    # A greedy 's/.*sec = //' also matches the "usec = " occurrence, so it returned the
+    # microseconds plus the trailing date text instead of the epoch. That single bug
+    # blanked last_boot_time, boot_time and both uptime fields. Take the first integer.
+    MAC_BOOT_EPOCH=$(sysctl -n kern.boottime 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    if [ -n "$MAC_BOOT_EPOCH" ]; then
+        LAST_BOOT_TIME=$(python3 -c "import datetime,sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1])).strftime('%Y-%m-%d %H:%M:%S'))" "$MAC_BOOT_EPOCH" 2>/dev/null)
+    fi
     DOMAIN_NAME=$(dsconfigad -show 2>/dev/null | awk -F'=' '/Active Directory Domain/{print $2}' | sed 's/^ *//' || echo "Unknown")
-    BIOS_VERSION=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Boot ROM Version/{print $2}' | head -1 | sed 's/^ *//')
+    # Big Sur and later renamed this key from "Boot ROM Version"
+    BIOS_VERSION=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/System Firmware Version/{print $2}' | head -1 | sed 's/^ *//')
+    [ -z "$BIOS_VERSION" ] && BIOS_VERSION=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Boot ROM Version/{print $2}' | head -1 | sed 's/^ *//')
+
+    # Device description — the user-facing computer name
+    DEVICE_DESC=$(scutil --get ComputerName 2>/dev/null)
+    [ -z "$DEVICE_DESC" ] && DEVICE_DESC=$(sysctl -n hw.model 2>/dev/null)
+
+    # Domain role — bound to Active Directory or standalone
+    if [ -n "$DOMAIN_NAME" ] && [ "$DOMAIN_NAME" != "Unknown" ]; then
+        DOMAIN_ROLE="Domain Member Workstation"
+    else
+        DOMAIN_ROLE="Standalone Workstation"
+        DOMAIN_NAME="Not domain-joined"
+    fi
+
+    # Time Machine — most recent completed backup
+    LAST_BACKUP_TIME=$(tmutil latestbackup 2>/dev/null | sed 's|.*/||' | tr -d '\n')
+    [ -z "$LAST_BACKUP_TIME" ] && LAST_BACKUP_TIME=$(defaults read /Library/Preferences/com.apple.TimeMachine.plist 2>/dev/null | awk -F'= ' '/BACKUP_COMPLETED_DATE/{print $2}' | tr -d '";' | head -1)
+    [ -z "$LAST_BACKUP_TIME" ] && LAST_BACKUP_TIME="No Time Machine backup found"
+
     [ -z "$SERIAL_NUMBER" ]  && SERIAL_NUMBER="Unknown"
     [ -z "$MODEL_NAME" ]     && MODEL_NAME="Unknown"
     [ -z "$BIOS_VERSION" ]   && BIOS_VERSION="Unknown"
-    [ -z "$DOMAIN_NAME" ]    && DOMAIN_NAME="Unknown"
+    [ -z "$DEVICE_DESC" ]    && DEVICE_DESC="Unknown"
     [ -z "$LAST_BOOT_TIME" ] && LAST_BOOT_TIME="Unknown"
 else
+    # ── Linux ────────────────────────────────────────────────────────────────
+    # dmidecode needs root, and this script runs as an ordinary user, so relying
+    # on it alone left vendor/model/BIOS/CPU all "Unknown" on real hardware too —
+    # not just in containers. /sys/class/dmi/id exposes most of the same values
+    # world-readable, so read those first and keep dmidecode as the fallback.
+    _dmi() { [ -r "/sys/class/dmi/id/$1" ] && tr -d '\n' < "/sys/class/dmi/id/$1"; }
+    _clean_dmi() {
+        # Vendors leave placeholder junk in SMBIOS ("To Be Filled By O.E.M.",
+        # "Default string", ...). Match on prefix — anchoring the whole string
+        # misses them, since the real values are longer than the marker.
+        _v=$(printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        case "$(printf '%s' "$_v" | tr '[:upper:]' '[:lower:]')" in
+            ''|none|n/a|unknown|0|x|.|\
+            'to be filled'*|'default string'*|'system manufacturer'*|\
+            'system product name'*|'system serial number'*|'system version'*|\
+            'not specified'*|'not available'*|'o.e.m.'*|'filled by o.e.m.'*|\
+            'chassis manufacturer'*|'asset-1234567890'*)
+                printf '' ;;
+            *)  printf '%s' "$_v" ;;
+        esac
+    }
+
+    MANUFACTURER=$(_clean_dmi "$(_dmi sys_vendor)")
+    MODEL_NAME=$(_clean_dmi "$(_dmi product_name)")
+    BIOS_VERSION=$(_clean_dmi "$(_dmi bios_version)")
+    BIOS_DATE=$(_clean_dmi "$(_dmi bios_date)")
+    SERIAL_NUMBER=$(_clean_dmi "$(_dmi product_serial)")      # 0400 — root only
+    ASSET_TAG=$(_clean_dmi "$(_dmi chassis_asset_tag)")       # 0400 — root only
+
+    # /proc/cpuinfo is always readable and gives the real CPU model
+    PROCESSOR_TYPE=$(awk -F': ' '/^model name/{print $2; exit}' /proc/cpuinfo 2>/dev/null)
+    [ -z "$PROCESSOR_TYPE" ] && PROCESSOR_TYPE=$(awk -F': ' '/^Model/{print $2; exit}' /proc/cpuinfo 2>/dev/null)
+
+    # dmidecode only fills what /sys could not (i.e. when running elevated)
     if command -v dmidecode >/dev/null 2>&1; then
-        SERIAL_NUMBER=$(dmidecode -s system-serial-number 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
-        MANUFACTURER=$(dmidecode -s system-manufacturer 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
-        MODEL_NAME=$(dmidecode -s system-product-name 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
-        BIOS_VERSION=$(dmidecode -s bios-version 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
-        BIOS_DATE=$(dmidecode -s bios-release-date 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
-        ASSET_TAG=$(dmidecode -s chassis-asset-tag 2>/dev/null | grep -v '^#\|To Be Filled\|Default\|None' | head -1 || echo "Unknown")
-        PROCESSOR_TYPE=$(dmidecode -s processor-version 2>/dev/null | grep -v '^#' | head -1 || echo "Unknown")
+        [ -z "$SERIAL_NUMBER" ]  && SERIAL_NUMBER=$(dmidecode -s system-serial-number 2>/dev/null | grep -v '^#' | head -1)
+        [ -z "$MANUFACTURER" ]   && MANUFACTURER=$(dmidecode -s system-manufacturer 2>/dev/null | grep -v '^#' | head -1)
+        [ -z "$MODEL_NAME" ]     && MODEL_NAME=$(dmidecode -s system-product-name 2>/dev/null | grep -v '^#' | head -1)
+        [ -z "$BIOS_VERSION" ]   && BIOS_VERSION=$(dmidecode -s bios-version 2>/dev/null | grep -v '^#' | head -1)
+        [ -z "$BIOS_DATE" ]      && BIOS_DATE=$(dmidecode -s bios-release-date 2>/dev/null | grep -v '^#' | head -1)
+        [ -z "$ASSET_TAG" ]      && ASSET_TAG=$(dmidecode -s chassis-asset-tag 2>/dev/null | grep -vE '^#|To Be Filled|Default|None' | head -1)
+        [ -z "$PROCESSOR_TYPE" ] && PROCESSOR_TYPE=$(dmidecode -s processor-version 2>/dev/null | grep -v '^#' | head -1)
     fi
-    # Domain
+    # These two are mode 0400 in /sys and root-only via dmidecode
+    [ -z "$SERIAL_NUMBER" ] && SERIAL_NUMBER="Unknown (requires root)"
+    [ -z "$ASSET_TAG" ]     && ASSET_TAG="Unknown (requires root)"
+
+    # Device description — friendly name, else chassis type
+    DEVICE_DESC=$(hostnamectl --pretty 2>/dev/null | tr -d '\n')
+    [ -z "$DEVICE_DESC" ] && DEVICE_DESC=$(awk -F= '/^PRETTY_HOSTNAME/{print $2}' /etc/machine-info 2>/dev/null | tr -d '"')
+    if [ -z "$DEVICE_DESC" ]; then
+        # hostnamectl appends a glyph ("Chassis: container +") — take the first
+        # word rather than stripping it by character, so this stays pure ASCII.
+        _CHASSIS=$(hostnamectl 2>/dev/null | awk -F': ' '/Chassis/{print $2}' | awk '{print $1}' | tr -d '\n')
+        [ -z "$_CHASSIS" ] && _CHASSIS=$(_clean_dmi "$(_dmi chassis_type)")
+        [ -n "$MODEL_NAME" ] && DEVICE_DESC="$MODEL_NAME${_CHASSIS:+ ($_CHASSIS)}" || DEVICE_DESC="$_CHASSIS"
+    fi
+
+    # Domain + role
     if command -v realm >/dev/null 2>&1; then
         DOMAIN_NAME=$(realm list 2>/dev/null | awk '/domain-name/{print $2}' | head -1)
     fi
-    [ -z "$DOMAIN_NAME" ] && DOMAIN_NAME=$(cat /etc/hostname 2>/dev/null | cut -d'.' -f2- || echo "Unknown")
-    # Number of processors
+    [ -z "$DOMAIN_NAME" ] && DOMAIN_NAME=$(hostname -d 2>/dev/null | tr -d '\n')
+    if [ -n "$DOMAIN_NAME" ] && [ "$DOMAIN_NAME" != "Unknown" ]; then
+        DOMAIN_ROLE="Domain Member Workstation"
+    else
+        DOMAIN_NAME="Not domain-joined"
+        DOMAIN_ROLE="Standalone Workstation"
+    fi
+
     NUM_PROCESSORS=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo "Unknown")
-    # Memory slots
+
+    # Memory slots — dmidecode when elevated, otherwise report the total
     if command -v dmidecode >/dev/null 2>&1; then
         MEMORY_SLOTS=$(dmidecode -t memory 2>/dev/null | grep -E 'Size:|Type:|Speed:' | paste - - - | head -4 | sed 's/\t/,/g' | tr '\n' ';')
     fi
-    # Last boot
+    # Pre-seeded to "Unknown" further up, so an empty-check alone never fires
+    if [ -z "$MEMORY_SLOTS" ] || [ "$MEMORY_SLOTS" = "Unknown" ]; then
+        MEMORY_SLOTS="Total ${RAM} (per-slot detail requires root)"
+    fi
+
+    # Linux has no standard backup agent to query
+    LAST_BACKUP_TIME="Not Applicable (no backup agent)"
+
     LAST_BOOT_TIME=$(who -b 2>/dev/null | awk '{print $3,$4}' | head -1)
     [ -z "$LAST_BOOT_TIME" ] && LAST_BOOT_TIME=$(uptime -s 2>/dev/null || echo "Unknown")
+
+    [ -z "$MANUFACTURER" ]   && MANUFACTURER="Unknown"
+    [ -z "$MODEL_NAME" ]     && MODEL_NAME="Unknown"
+    [ -z "$BIOS_VERSION" ]   && BIOS_VERSION="Unknown"
+    [ -z "$BIOS_DATE" ]      && BIOS_DATE="Unknown"
+    [ -z "$PROCESSOR_TYPE" ] && PROCESSOR_TYPE="Unknown"
+    [ -z "$DEVICE_DESC" ]    && DEVICE_DESC="Unknown"
 fi
 
 # Scanner Name
@@ -226,7 +371,11 @@ SCANNER_NAME="Prevoyance Inspection"
 
 # Site — timezone region
 if [ "$OS_NAME" = "macOS" ]; then
-    SITE_NAME=$(systemsetup -gettimezone 2>/dev/null | awk -F': ' '{print $2}' | tr -d '\n')
+    # readlink needs no privileges; `systemsetup` often requires admin and then
+    # returns nothing, leaving the field Unknown.
+    SITE_NAME=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||' | tr -d '\n')
+    [ -z "$SITE_NAME" ] && SITE_NAME=$(systemsetup -gettimezone 2>/dev/null | awk -F': ' '{print $2}' | tr -d '\n')
+    [ -z "$SITE_NAME" ] && SITE_NAME=$(date +"%Z" 2>/dev/null | tr -d '\n')
 else
     SITE_NAME=$(timedatectl 2>/dev/null | awk -F': ' '/Time zone/{print $2}' | awk '{print $1}' | tr -d '\n')
     [ -z "$SITE_NAME" ] && SITE_NAME=$(cat /etc/timezone 2>/dev/null | tr -d '\n')
@@ -259,9 +408,10 @@ fi
 # System status + uptime
 SYSTEM_STATUS="Online"
 if [ "$OS_NAME" = "macOS" ]; then
-    BOOT_EPOCH=$(sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = //' | sed 's/,.*//')
+    # Same "usec" trap as above — take the first integer, not everything after "sec = "
+    BOOT_EPOCH=$(sysctl -n kern.boottime 2>/dev/null | grep -oE '[0-9]+' | head -1)
     if [ -n "$BOOT_EPOCH" ]; then
-        BOOT_TIME_STR=$(python3 -c "import datetime; print(datetime.datetime.fromtimestamp($BOOT_EPOCH).strftime('%Y-%m-%d %H:%M:%S'))" 2>/dev/null)
+        BOOT_TIME_STR=$(python3 -c "import datetime,sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1])).strftime('%Y-%m-%d %H:%M:%S'))" "$BOOT_EPOCH" 2>/dev/null)
         UPTIME_SECS_TOTAL=$(($(date +%s) - BOOT_EPOCH))
         UD=$((UPTIME_SECS_TOTAL / 86400))
         UH=$(( (UPTIME_SECS_TOTAL % 86400) / 3600 ))
@@ -284,9 +434,21 @@ else
         fi
     fi
 fi
-# Last shutdown from wtmp
-LAST_SHUTDOWN=$(last -n 1 -x shutdown 2>/dev/null | head -1 | awk '{if(NF>3) print $5" "$6" "$7" "$8}' | tr -d '\n')
-[ -z "$LAST_SHUTDOWN" ] && LAST_SHUTDOWN="Unknown"
+# Last shutdown. BSD `last` on macOS has no -x flag, and recent macOS releases no
+# longer write shutdown records to wtmp at all — so fall back to the power
+# management log, which does record them.
+if [ "$OS_NAME" = "macOS" ]; then
+    LAST_SHUTDOWN=$(last -n 1 shutdown 2>/dev/null | head -1 | awk '{if (NF>3) {out=$3; for(i=4;i<=NF;i++) out=out" "$i; print out}}' | tr -d '\n')
+    if [ -z "$LAST_SHUTDOWN" ]; then
+        LAST_SHUTDOWN=$(pmset -g log 2>/dev/null | grep -iE 'Shutdown|Powering Off' | tail -1 | awk '{print $1" "$2}' | tr -d '\n')
+    fi
+    # Distinguish "macOS does not record this" from "collection failed"
+    [ -z "$LAST_SHUTDOWN" ] && LAST_SHUTDOWN="Not recorded by macOS"
+else
+    LAST_SHUTDOWN=$(last -n 1 -x shutdown 2>/dev/null | head -1 | awk '{if(NF>3) print $5" "$6" "$7" "$8}' | tr -d '\n')
+    [ -z "$LAST_SHUTDOWN" ] && LAST_SHUTDOWN=$(last -n 1 shutdown 2>/dev/null | head -1 | awk '{if(NF>3) print $3" "$4" "$5" "$6}' | tr -d '\n')
+    [ -z "$LAST_SHUTDOWN" ] && LAST_SHUTDOWN="Unknown"
+fi
 
 # Sanitize all string variables for JSON (escape quotes, backslashes, remove newlines)
 json_safe() { echo "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r' | tr -d '\t'; }
@@ -312,6 +474,8 @@ ASSET_TAG=$(json_safe "$ASSET_TAG")
 PROCESSOR_TYPE=$(json_safe "$PROCESSOR_TYPE")
 MEMORY_SLOTS=$(json_safe "$MEMORY_SLOTS")
 LAST_BOOT_TIME=$(json_safe "$LAST_BOOT_TIME")
+LAST_BACKUP_TIME=$(json_safe "$LAST_BACKUP_TIME")
+NUM_PROCESSORS=$(json_safe "$NUM_PROCESSORS")
 SCANNER_NAME=$(json_safe "$SCANNER_NAME")
 SITE_NAME=$(json_safe "$SITE_NAME")
 ORG_NAME=$(json_safe "$ORG_NAME")
@@ -450,7 +614,7 @@ DISK_PARTITIONS_JSON="[]"
 if command -v python3 >/dev/null 2>&1; then
     if [ "$OS_NAME" = "macOS" ]; then
         DISK_PARTITIONS_JSON=$(python3 - <<'PYEOF'
-import subprocess, json
+import subprocess, json, re
 try:
     r = subprocess.run(['diskutil', 'list', '-plist'], capture_output=True, text=True, timeout=10)
     partitions = []
@@ -463,10 +627,16 @@ try:
         if len(dparts) >= 4: df_map[dparts[0]] = (dparts[3], dparts[1])  # avail, size
     for line in rt.stdout.splitlines():
         parts = line.split()
-        if parts and parts[0].isdigit():
-            name  = parts[-1] if len(parts) > 1 else "Unknown"
+        # `diskutil list` numbers rows as "0:", "1:" — the trailing colon meant
+        # isdigit() never matched and the partition list always came back empty.
+        if parts and parts[0].rstrip(':').isdigit():
+            # The NAME column may be blank or contain spaces ("Container disk3"),
+            # so fixed offsets mis-read the size. Anchor on the tail instead:
+            #   "  2:   Apple_APFS Container disk3   494.4 GB   disk0s2"
+            tail = re.search(r'\*?([\d.]+\s+[KMGT]?B)\s+(\S+)\s*$', line)
+            name  = tail.group(2) if tail else (parts[-1] if len(parts) > 1 else "Unknown")
+            size  = re.sub(r'\s+', ' ', tail.group(1)) if tail else "Unknown"
             ptype = parts[1] if len(parts) > 1 else "Unknown"
-            size  = " ".join(parts[3:5]) if len(parts) >= 5 else "Unknown"
             free_space = "Unknown"; fs = "Unknown"
             dev = "/dev/" + name
             if dev in df_map: free_space, _ = df_map[dev]
@@ -484,10 +654,15 @@ except:
 PYEOF
 )
     elif command -v lsblk >/dev/null 2>&1; then
-        DISK_PARTITIONS_JSON=$(lsblk -J -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE 2>/dev/null | python3 - <<'PYEOF'
+        DISK_PARTITIONS_JSON=$(python3 - <<'PYEOF'
 import sys, json, subprocess
 try:
-    data = json.load(sys.stdin)
+    # `lsblk ... | python3 - <<EOF` cannot work: the heredoc supplies the program
+    # on stdin, so the piped JSON was discarded and json.load(sys.stdin) always
+    # raised — leaving disk_partitions empty on every Linux audit. Call it here.
+    data = json.loads(subprocess.run(
+        ['lsblk', '-J', '-o', 'NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE'],
+        capture_output=True, text=True, timeout=10).stdout or '{}')
     partitions = []
     df_map = {}
     try:
@@ -624,27 +799,84 @@ if command -v python3 >/dev/null 2>&1; then
         PERIPHERALS_JSON=$(python3 - <<'PYEOF'
 import subprocess, json
 peripherals = []
-try:
-    r = subprocess.run(['system_profiler', 'SPUSBDataType', '-json'],
-                       capture_output=True, text=True, timeout=20)
-    data = json.loads(r.stdout)
-    def extract(items):
-        for item in items:
-            name = item.get('_name', '')
-            if name:
-                peripherals.append({
-                    'name': name,
-                    'type': 'USB',
-                    'description': item.get('_name', 'Unknown'),
-                    'manufacturer': item.get('manufacturer', 'Unknown') or 'Unknown',
-                    'version': item.get('bcd_device', 'Unknown') or 'Unknown'
-                })
-            for sub in item.get('_items', []):
-                extract([sub])
-    extract(data.get('SPUSBDataType', []))
-except Exception:
-    pass
-print(json.dumps(peripherals[:30]))
+seen = set()
+
+
+def sp(datatype):
+    """One system_profiler datatype as a list, or [] if unavailable."""
+    try:
+        r = subprocess.run(['system_profiler', datatype, '-json'],
+                           capture_output=True, text=True, timeout=25)
+        return json.loads(r.stdout).get(datatype, [])
+    except Exception:
+        return []
+
+
+def add(name, ptype, description='', manufacturer='Unknown', version='Unknown'):
+    name = (name or '').strip()
+    if not name:
+        return
+    key = (name.lower(), ptype)
+    if key in seen:
+        return
+    seen.add(key)
+    peripherals.append({
+        'name': name,
+        'type': ptype,
+        'description': (description or name) or 'Unknown',
+        'manufacturer': manufacturer or 'Unknown',
+        'version': version or 'Unknown',
+    })
+
+
+# External USB — recurse, skipping hubs/buses which are not real peripherals
+def walk_usb(items):
+    for item in items:
+        name = item.get('_name', '')
+        if name and not any(w in name.lower() for w in ('hub', 'bus')):
+            add(name, 'USB', name,
+                item.get('manufacturer', 'Unknown'),
+                item.get('bcd_device', 'Unknown'))
+        walk_usb(item.get('_items', []))
+
+
+walk_usb(sp('SPUSBDataType'))
+
+# Built-in hardware. A MacBook with nothing plugged in has no external USB at all,
+# so a USB-only scan reported zero peripherals — the keyboard, trackpad, camera,
+# speakers and display are all internal and were invisible.
+for cam in sp('SPCameraDataType'):
+    add(cam.get('_name', ''), 'Camera (Built-in)', 'Built-in camera', 'Apple Inc.')
+
+for audio in sp('SPAudioDataType'):
+    for dev in audio.get('_items', []) or []:
+        nm = dev.get('_name', '')
+        direction = dev.get('coreaudio_device_transport', '') or ''
+        kind = 'Audio (Built-in)' if 'built' in direction.lower() or not direction else 'Audio'
+        add(nm, kind, 'Audio device', dev.get('coreaudio_device_manufacturer', 'Apple Inc.'))
+
+for gpu in sp('SPDisplaysDataType'):
+    for disp in gpu.get('spdisplays_ndrvs', []) or []:
+        nm = disp.get('_name', '')
+        internal = 'built' in str(disp.get('spdisplays_display_type', '')).lower()
+        add(nm, 'Display (Built-in)' if internal else 'Display', 'Display panel', 'Apple Inc.')
+
+for bt in sp('SPBluetoothDataType'):
+    for group in (bt.get('device_title') or []):
+        if isinstance(group, dict):
+            for nm, info in group.items():
+                info = info or {}
+                add(nm, 'Bluetooth', info.get('device_minorType', 'Bluetooth device'),
+                    info.get('device_vendorID', 'Unknown'))
+
+# Keyboard / trackpad — on Apple Silicon these sit on an internal bus, not USB
+for hw in sp('SPHardwareDataType'):
+    model = hw.get('machine_model', '') or hw.get('_name', '')
+    if 'book' in str(hw.get('machine_name', model)).lower() or 'book' in str(model).lower():
+        add('Built-in Keyboard', 'Keyboard (Built-in)', 'Internal keyboard', 'Apple Inc.')
+        add('Built-in Trackpad', 'Trackpad (Built-in)', 'Internal trackpad', 'Apple Inc.')
+
+print(json.dumps(peripherals[:40]))
 PYEOF
 )
     else
