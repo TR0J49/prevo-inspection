@@ -422,7 +422,8 @@ class NetworkAdapter(_CleanBase):
     speed: str = "Unknown"
     mac_address: str = "Unknown"       # Excel: MAC address
     gateway: str = "Unknown"           # Excel: gateway
-    network_mask: str = "Unknown"      # Excel: network mask
+    network_mask: str = "Unknown"
+    ipv6_prefix: str = "Unknown"      # Excel: network mask
     dns_domain: str = "Unknown"        # Excel: DNS domain
     dns_servers: str = "Unknown"       # Excel: DNS servers
     dhcp_server: str = "Unknown"       # Excel: DHCP server
@@ -499,7 +500,12 @@ class HardwareDetails(BaseModel):
     domain: str = "Unknown"            # Excel: domain
     domain_role: str = "Unknown"       # Excel: domain role
     description: str = "Unknown"       # Excel: description
-    memory_slots: str = "Unknown"      # Excel: memory slot count, current size, max size
+    memory_slots: str = "Unknown"
+    device_type: str = "Unknown"          # Excel: Device Data -> device type
+    memory_slot_count: str = "Unknown"    # Excel: memory slot count
+    memory_used_slots: str = "Unknown"
+    memory_current_size: str = "Unknown"  # Excel: current size
+    memory_max_size: str = "Unknown"      # Excel: max size      # Excel: memory slot count, current size, max size
     last_backup_time: str = "Unknown"  # Excel: last backup time
     # Auto-discovered fields
     scanner_name: str = "Unknown"
@@ -524,7 +530,8 @@ class HardwareDetails(BaseModel):
         "cpu", "ram", "disk", "serial_number", "manufacturer", "model",
         "num_processors", "processor_type", "bios_version", "bios_date",
         "asset_tag", "last_boot_time", "domain", "domain_role", "description",
-        "memory_slots", "last_backup_time",
+        "memory_slots", "device_type", "memory_slot_count", "memory_used_slots",
+        "memory_current_size", "memory_max_size", "last_backup_time",
         "scanner_name", "site", "organization", "location", "public_ip",
         "system_status", "uptime_display", "boot_time", "last_shutdown",
         mode="before"
@@ -607,6 +614,8 @@ class AuditData(BaseModel):
     computer_name: str = "Unknown"
     os_name: str = "Unknown"
     os_version: str = "Unknown"
+    service_pack: str = "None"   # Excel: OS name, version, service pack versions
+    os_build: str = "Unknown"    # readable feature version, e.g. "25H2 (Build 26200.8894)"
     architecture: str = "Unknown"
     license_status: str = "Unknown"
     hotfixes: List[Union[HotfixData, str]] = []
@@ -847,6 +856,62 @@ def get_hw(data, key, fallback="Unknown"):
     elif isinstance(hw, dict):
         return str(hw.get(key, fallback))
     return fallback
+
+
+def _parse_size_gb(text) -> float:
+    """'476.94 GB' / '931.5G' / '201.3M' -> gigabytes. 0.0 when unparseable."""
+    import re as _re
+    if not text:
+        return 0.0
+    m = _re.match(r'\s*([\d.,]+)\s*([KMGTP]?)', str(text).strip().upper().replace(',', ''))
+    if not m:
+        return 0.0
+    try:
+        val = float(m.group(1))
+    except ValueError:
+        return 0.0
+    return val * {'': 1.0, 'K': 1 / 1048576, 'M': 1 / 1024, 'G': 1.0,
+                  'T': 1024.0, 'P': 1048576.0}.get(m.group(2), 1.0)
+
+
+def _storage_summary_from_dict(d: dict) -> dict:
+    """Same totals, for the plain-dict path used by /api/software."""
+    class _Shim:
+        hardware_details = d.get("hardware_details", {}) if isinstance(d, dict) else {}
+    return summarise_storage(_Shim())
+
+
+def summarise_storage(data) -> dict:
+    """Totals across physical disks. Computed here so every platform gets the
+    same figures from whatever its own collector reported."""
+    disks = get_hw_list(data, "disk_details")
+    ssd_gb = hdd_gb = total_gb = 0.0
+    ssd_n = hdd_n = 0
+    for d in disks:
+        dd = d if isinstance(d, dict) else model_to_dict(d)
+        gb = _parse_size_gb(dd.get("size"))
+        total_gb += gb
+        flag = str(dd.get("is_ssd", "")).strip().lower()
+        if flag == "yes":
+            ssd_gb += gb
+            ssd_n += 1
+        elif flag == "no":
+            hdd_gb += gb
+            hdd_n += 1
+
+    def fmt(gb):
+        if gb <= 0:
+            return "0 GB"
+        return "%.2f TB" % (gb / 1024) if gb >= 1024 else "%.2f GB" % gb
+
+    return {
+        "disk_count":      str(len(disks)),
+        "ssd_count":       str(ssd_n),
+        "hdd_count":       str(hdd_n),
+        "ssd_total_size":  fmt(ssd_gb),
+        "hdd_total_size":  fmt(hdd_gb),
+        "storage_total":   fmt(total_gb),
+    }
 
 
 def get_hw_list(data, key):
@@ -1674,7 +1739,8 @@ def get_software_for_device(computer_name: str):
         "login_history":      latest_data.get("login_history", []),
         "hotfixes":           latest_data.get("hotfixes", []),
         "antivirus":          latest_data.get("antivirus", ""),
-        "printers":           latest_data.get("printers", [])
+        "printers":           latest_data.get("printers", []),
+        "storage_summary":    _storage_summary_from_dict(latest_data)
     }
 
 
@@ -1836,31 +1902,23 @@ def network_scan(request: NetworkScanRequest):
             pass
         return ip_str   # always return the IP, never "N/A"
 
-    def scan_host(ip):
-        ip_str     = str(ip)
-        open_ports = []
-        hostname   = _resolve_host(ip_str)
-
-        for port in common_ports:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(timeout_secs)
-                if sock.connect_ex((ip_str, port)) == 0:
-                    open_ports.append(port)
-                sock.close()
-            except Exception:
-                pass
-
-        if open_ports:
-            port_labels = [f"{p} ({PORT_LABELS.get(p, 'Unknown')})" for p in open_ports]
-            return {
-                "ip":          ip_str,
-                "hostname":    hostname,
-                "open_ports":  open_ports,
-                "port_labels": port_labels,
-                "device_type": guess_device_type(open_ports),
-                "status":      "online",
-            }
+    def _probe(task):
+        """One TCP connect. Returns (ip, port) when open, else None."""
+        ip_str, port = task
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout_secs)
+            if sock.connect_ex((ip_str, port)) == 0:
+                return (ip_str, port)
+        except Exception:
+            pass
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
         return None
 
     logger.info(f"Starting network scan: {request.ip_range}")
@@ -1885,11 +1943,52 @@ def network_scan(request: NetworkScanRequest):
 
     # ─────────────────────────────────────────────────────────────────────────
     # Step 2: Port Scan — identifies Windows/Linux/printer devices by open ports
+    #
+    # Every (host, port) pair goes into ONE wide pool instead of scanning a
+    # host's ports one after another. Previously a dead host cost
+    # 10 ports x timeout in series (~10 s at a 1 s timeout), and with only 64
+    # workers a /24 needed four such waves.
     # ─────────────────────────────────────────────────────────────────────────
-    with concurrent.futures.ThreadPoolExecutor(max_workers=64) as executor:
-        results = list(executor.map(scan_host, hosts))
+    tasks = [(str(h), p) for h in hosts for p in common_ports]
+    open_map: dict = {}
+    scan_workers = max(64, min(512, len(tasks)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=scan_workers) as executor:
+        for hit in executor.map(_probe, tasks):
+            if hit:
+                open_map.setdefault(hit[0], []).append(hit[1])
 
-    discovered_dict = {r["ip"]: r for r in results if r is not None}
+    # Reverse DNS is the other big cost: ~9 s per unreachable address, and it used
+    # to run for all 254 hosts before a single port was checked. Only resolve the
+    # handful that actually answered, and cap how long we wait for the lookups.
+    discovered_dict = {}
+    if open_map:
+        live_ips  = list(open_map.keys())
+        hostnames = {ip: ip for ip in live_ips}
+        # NOTE: no `with` here. ThreadPoolExecutor.__exit__ calls shutdown(wait=True),
+        # which blocks until every lookup finishes - including a ~9 s one - making
+        # the timeout below pointless. Shut down without waiting instead.
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(live_ips)))
+        try:
+            futures = {executor.submit(_resolve_host, ip): ip for ip in live_ips}
+            done, _ = concurrent.futures.wait(futures, timeout=3)
+            for fut in done:
+                try:
+                    hostnames[futures[fut]] = fut.result()
+                except Exception:
+                    pass
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        for ip_str, ports in open_map.items():
+            ports = sorted(ports)
+            discovered_dict[ip_str] = {
+                "ip":          ip_str,
+                "hostname":    hostnames.get(ip_str, ip_str),
+                "open_ports":  ports,
+                "port_labels": [f"{p} ({PORT_LABELS.get(p, 'Unknown')})" for p in ports],
+                "device_type": guess_device_type(ports),
+                "status":      "online",
+            }
 
     
     # ────────────────────────────────────────────────────────────────────────────
@@ -1900,6 +1999,7 @@ def network_scan(request: NetworkScanRequest):
         network_ip    = str(network.network_address)
         BROADCAST_MACS = {"ff-ff-ff-ff-ff-ff", "ff:ff:ff:ff:ff:ff", "00-00-00-00-00-00"}
 
+        arp_candidates = []
         arp_out, _ = _run_cmd("arp -a")
         for line in arp_out.splitlines():
             line = line.strip()
@@ -1925,28 +2025,46 @@ def network_scan(request: NetworkScanRequest):
                     continue
                 if ip_str in discovered_dict:
                     continue
-
-                hostname = _resolve_host(ip_str)
-
-                # Guess device type by hostname pattern
-                h_lower = hostname.lower()
-                if any(x in h_lower for x in ["desktop", "laptop", "pc", "workstation", "win"]):
-                    dev_type = "Windows Host (Firewalled)"
-                elif any(x in h_lower for x in ["android", "iphone", "ipad", "samsung", "pixel"]):
-                    dev_type = "Mobile Device"
-                else:
-                    dev_type = "Unknown Device (Firewalled)"
-
-                discovered_dict[ip_str] = {
-                    "ip":          ip_str,
-                    "hostname":    hostname,
-                    "open_ports":  [],
-                    "port_labels": [f"MAC: {mac_str}"],
-                    "device_type": dev_type,
-                    "status":      "online"
-                }
+                arp_candidates.append((ip_str, mac_str))
             except Exception:
                 pass
+
+        # Resolve these in parallel with a hard cap. Done one at a time, a single
+        # address with no PTR record blocks for ~9 s and dominated the scan.
+        arp_names = {ip: ip for ip, _ in arp_candidates}
+        if arp_candidates:
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(arp_candidates)))
+            try:
+                futures = {executor.submit(_resolve_host, ip): ip for ip, _ in arp_candidates}
+                done, _ = concurrent.futures.wait(futures, timeout=3)
+                for fut in done:
+                    try:
+                        arp_names[futures[fut]] = fut.result()
+                    except Exception:
+                        pass
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+
+        for ip_str, mac_str in arp_candidates:
+            hostname = arp_names.get(ip_str, ip_str)
+
+            # Guess device type by hostname pattern
+            h_lower = hostname.lower()
+            if any(x in h_lower for x in ["desktop", "laptop", "pc", "workstation", "win"]):
+                dev_type = "Windows Host (Firewalled)"
+            elif any(x in h_lower for x in ["android", "iphone", "ipad", "samsung", "pixel"]):
+                dev_type = "Mobile Device"
+            else:
+                dev_type = "Unknown Device (Firewalled)"
+
+            discovered_dict[ip_str] = {
+                "ip":          ip_str,
+                "hostname":    hostname,
+                "open_ports":  [],
+                "port_labels": [f"MAC: {mac_str}"],
+                "device_type": dev_type,
+                "status":      "online"
+            }
     except Exception as e:
         logger.error(f"ARP scan fallback failed: {e}")
 

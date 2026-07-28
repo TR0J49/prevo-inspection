@@ -31,11 +31,63 @@ $computer = Get-SafeString $env:COMPUTERNAME "Unknown"
 $osName      = "Unknown"
 $osVersion   = "Unknown"
 $architecture = "Unknown"
+$servicePack = "None"
+$osBuild     = "Unknown"
 try {
     $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
     $osName       = Get-SafeString $os.Caption "Unknown"
     $osVersion    = Get-SafeString $os.Version "Unknown"
     $architecture = Get-SafeString $os.OSArchitecture "Unknown"
+
+    # "10.0.26200" is the kernel version; the feature-update name (25H2) and the
+    # full build with UBR are what people actually recognise.
+    try {
+        $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
+        if ($cv) {
+            $bld = "$($cv.CurrentBuild)"
+            if ($cv.UBR) { $bld = "$bld.$($cv.UBR)" }
+            if ($cv.DisplayVersion) { $osBuild = "$($cv.DisplayVersion) (Build $bld)" }
+            else                    { $osBuild = "Build $bld" }
+        }
+    } catch {}
+
+    # Excel: "OS name, version, service pack versions".
+    # Windows 10/11 have no service packs, so report "None" rather than a blank
+    # that reads like a collection failure.
+    if ($os.CSDVersion) {
+        $servicePack = Get-SafeString $os.CSDVersion "None"
+    } elseif ($os.ServicePackMajorVersion -and $os.ServicePackMajorVersion -gt 0) {
+        $servicePack = "SP$($os.ServicePackMajorVersion).$($os.ServicePackMinorVersion)"
+    } else {
+        $servicePack = "None"
+    }
+} catch {}
+
+# 2b. Device Type (Excel: Device Data -> "device type")
+# ChassisTypes is the reliable source; PCSystemType is the fallback.
+$deviceType = "Unknown"
+try {
+    $chassis = (Get-CimInstance Win32_SystemEnclosure -ErrorAction SilentlyContinue | Select-Object -First 1).ChassisTypes
+    $code = if ($chassis) { [int]$chassis[0] } else { 0 }
+    $deviceType = switch ($code) {
+        { $_ -in 3,4,5,6,7,15,16 }    { "Desktop"; break }
+        { $_ -in 8,9,10,11,12,14,18,21 } { "Laptop"; break }
+        { $_ -in 30,31,32 }           { "Tablet"; break }
+        { $_ -in 17,23,28 }           { "Server"; break }
+        { $_ -in 13 }                 { "All-in-One"; break }
+        default                       { "Unknown" }
+    }
+    if ($deviceType -eq "Unknown") {
+        $pcType = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).PCSystemType
+        $deviceType = switch ([int]$pcType) {
+            1 { "Desktop" } 2 { "Laptop" } 3 { "Workstation" }
+            4 { "Server" }  5 { "Server" } 7 { "Tablet" }
+            default { "Unknown" }
+        }
+    }
+    # A virtual machine is more useful to report than its emulated chassis
+    $csModel = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).Model
+    if ($csModel -match 'Virtual|VMware|KVM|Hyper-V|VirtualBox|Xen') { $deviceType = "Virtual Machine" }
 } catch {}
 
 # 3. License Status Check
@@ -204,6 +256,17 @@ try {
             $localUserMap[$_.Name] = $_
         }
     } catch {}
+
+    # Local Windows accounts almost never populate HomeDirectory - that field is for
+    # domain accounts with a mapped home share. The real per-user folder is the
+    # profile path (C:\Users\<name>), which lives in Win32_UserProfile keyed by SID.
+    $profileBySid = @{}
+    try {
+        Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.SID -and $_.LocalPath) { $profileBySid[$_.SID] = $_.LocalPath }
+        }
+    } catch {}
+
     foreach ($u in $wmiUsers) {
         $lastLogin = "Unknown"
         $numLogins  = "0"
@@ -214,6 +277,14 @@ try {
             if ($lu.LastLogon) { $lastLogin = $lu.LastLogon.ToString("yyyy-MM-dd HH:mm:ss") }
             $homeDir = Get-SafeString $lu.HomeDirectory "Unknown"
             if ([string]::IsNullOrWhiteSpace($homeDir)) { $homeDir = "Unknown" }
+        }
+        if ($homeDir -eq "Unknown" -and $u.SID -and $profileBySid.ContainsKey($u.SID)) {
+            $homeDir = $profileBySid[$u.SID]
+        }
+        if ($homeDir -eq "Unknown") {
+            # Last resort: the conventional profile location for this account
+            $guess = Join-Path $env:SystemDrive "Users\$($u.Name)"
+            if (Test-Path $guess) { $homeDir = $guess }
         }
         # Determine user type via group membership
         try {
@@ -267,7 +338,12 @@ $assetTag       = "Unknown"
 $domainName     = "Unknown"
 $domainRole     = "Unknown"
 $deviceDesc     = "Unknown"
-$memorySlots    = "Unknown"
+$memorySlots       = "Unknown"
+$memorySlotCount   = "Unknown"
+$memoryCurrentSize = "Unknown"
+$memoryMaxSize     = "Unknown"
+$memoryUsedSlots   = "Unknown"
+$memoryModules     = @()
 $lastBootTime   = "Unknown"
 $lastBackup     = "Unknown"
 $numProcessors  = "Unknown"
@@ -323,9 +399,31 @@ try {
     $memSlots  = Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction SilentlyContinue | Select-Object -First 1
     $memSticks = Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue
     if ($memSlots -and $memSticks) {
-        $totalMB  = ($memSticks | Measure-Object -Property Capacity -Sum).Sum / 1MB
-        $maxCapGB = [math]::Round($memSlots.MaxCapacity / 1024, 0)
-        $memorySlots = "Slots: $($memSlots.MemoryDevices) | Installed: $([math]::Round($totalMB/1024,1)) GB | Max: $($maxCapGB) GB"
+        $totalGB = [math]::Round((($memSticks | Measure-Object -Property Capacity -Sum).Sum) / 1GB, 1)
+        # MaxCapacity is in KILOBYTES. Dividing by 1024 gives MB, which was being
+        # labelled GB - an 8 GB limit was reported as "8192 GB". KB -> GB is /1048576.
+        $maxCapGB = [math]::Round($memSlots.MaxCapacity / 1048576, 0)
+        if ($maxCapGB -le 0 -and $memSlots.MaxCapacityEx) {
+            $maxCapGB = [math]::Round($memSlots.MaxCapacityEx / 1048576, 0)
+        }
+
+        # Excel asks for slot count, current size and max size as separate values
+        $memorySlotCount   = "$($memSlots.MemoryDevices)"
+        $memoryCurrentSize = "$totalGB GB"
+        $memoryMaxSize     = "$maxCapGB GB"
+        $memoryUsedSlots   = "$(@($memSticks).Count)"
+        $memorySlots = "Slots: $($memSlots.MemoryDevices) | Used: $memoryUsedSlots | Installed: $totalGB GB | Max: $maxCapGB GB"
+
+        foreach ($m in $memSticks) {
+            $memoryModules += @{
+                slot          = Get-SafeString $m.DeviceLocator "Unknown"
+                size          = "$([math]::Round($m.Capacity / 1GB, 1)) GB"
+                speed         = if ($m.Speed) { "$($m.Speed) MHz" } else { "Unknown" }
+                manufacturer  = Get-SafeString $m.Manufacturer "Unknown"
+                part_number   = Get-SafeString $m.PartNumber "Unknown"
+                serial_number = Get-SafeString $m.SerialNumber "Unknown"
+            }
+        }
     }
 } catch {}
 
@@ -336,15 +434,80 @@ try {
     }
 } catch {}
 
+# Last backup time. Every source Windows offers needs administrator rights, so a
+# manual non-elevated run cannot see any of them - that is why this was always
+# "Unknown". The scheduled agent runs as SYSTEM, where these all succeed. Try each
+# source in turn and, failing that, say WHY rather than reporting a bare Unknown.
+$isElevated = $false
 try {
-    $shadows = Get-CimInstance Win32_ShadowCopy -ErrorAction SilentlyContinue | Sort-Object InstallDate -Descending | Select-Object -First 1
-    if ($shadows) { $lastBackup = $shadows.InstallDate.ToString("yyyy-MM-dd HH:mm:ss") }
+    $isElevated = (New-Object Security.Principal.WindowsPrincipal(
+        [Security.Principal.WindowsIdentity]::GetCurrent())
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 } catch {}
 
-# Scanner Name — always "Prevoyance Inspection" (this tool)
-$scannerName = "Prevoyance Inspection"
+# 1. Volume Shadow Copies (System Protection / restore snapshots)
+try {
+    $shadows = Get-CimInstance Win32_ShadowCopy -ErrorAction Stop |
+        Sort-Object InstallDate -Descending | Select-Object -First 1
+    if ($shadows -and $shadows.InstallDate) {
+        $lastBackup = $shadows.InstallDate.ToString("yyyy-MM-dd HH:mm:ss") + " (Shadow Copy)"
+    }
+} catch {}
 
-# Site — AD site name (Windows domain-joined PCs)
+# 2. System Restore points
+if ($lastBackup -eq "Unknown") {
+    try {
+        $rp = Get-ComputerRestorePoint -ErrorAction Stop |
+            Sort-Object CreationTime -Descending | Select-Object -First 1
+        if ($rp -and $rp.CreationTime) {
+            $lastBackup = ([Management.ManagementDateTimeConverter]::ToDateTime($rp.CreationTime)
+                          ).ToString("yyyy-MM-dd HH:mm:ss") + " (System Restore)"
+        }
+    } catch {}
+}
+
+# 3. Windows Server Backup / wbadmin
+if ($lastBackup -eq "Unknown") {
+    try {
+        $wb = wbadmin get versions 2>$null | Select-String -Pattern 'Backup time:' | Select-Object -Last 1
+        if ($wb) {
+            $lastBackup = ($wb.ToString() -replace '.*Backup time:\s*', '').Trim() + " (Windows Backup)"
+        }
+    } catch {}
+}
+
+# 4. File History — only meaningful when actually configured
+if ($lastBackup -eq "Unknown") {
+    try {
+        $fhCfg = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\FileHistory\Configuration'
+        if (Test-Path $fhCfg) {
+            $newest = Get-ChildItem $fhCfg -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($newest) {
+                $lastBackup = $newest.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") + " (File History)"
+            }
+        }
+    } catch {}
+}
+
+if ($lastBackup -eq "Unknown") {
+    $lastBackup = if ($isElevated) { "No backup configured" } else { "Requires administrator rights" }
+}
+
+# Scanner Name — Excel note: "which scanner identified the asset".
+# A bare product name cannot answer that, so record the agent build, the platform
+# it ran on, and whether it ran unattended from the scheduled task or by hand.
+$scannerName = "Prevoyance Inspection"
+try {
+    $scanMode = "Manual"
+    if (Test-Path (Join-Path $env:ProgramData 'NSDLAudit\device.id')) { $scanMode = "Scheduled Agent" }
+    if ($env:USERNAME -eq "$env:COMPUTERNAME`$" -or $env:USERNAME -eq 'SYSTEM') { $scanMode = "Scheduled Agent" }
+    $scannerName = "Prevoyance Inspection v3.0.0 (Windows $scanMode)"
+} catch {}
+
+# Site — AD site name for domain PCs. Excel treats this as the location/site the
+# asset belongs to; on a workgroup PC there is no AD site, so fall back to the
+# organisation's DNS domain and then to the timezone region.
 try {
     $siteResult = nltest /dsgetsite 2>$null
     if ($siteResult -and $siteResult.Count -gt 0) {
@@ -352,12 +515,33 @@ try {
         if ($siteParsed -and $siteParsed -ne "ERROR") { $siteName = $siteParsed }
     }
 } catch {}
+if ($siteName -eq "Unknown") {
+    try {
+        $dom = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).Domain
+        if ($dom -and $dom -notmatch '^(WORKGROUP|)$') {
+            $siteName     = $dom
+            $siteName_web = "https://$dom"
+        }
+    } catch {}
+}
+if ($siteName -eq "Unknown") {
+    try { $siteName = (Get-TimeZone -ErrorAction SilentlyContinue).Id } catch {}
+}
 
-# Organization — from Windows registry
+# Organization — registered organisation first; on consumer installs that key is
+# empty, so fall back to the registered owner and finally the hardware maker.
 try {
-    $regOrg = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "RegisteredOrganization" -ErrorAction SilentlyContinue
-    if ($regOrg -and $regOrg.RegisteredOrganization -and $regOrg.RegisteredOrganization.Trim() -ne "") {
-        $orgName = $regOrg.RegisteredOrganization.Trim()
+    $cvKey = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction SilentlyContinue
+    $csObj = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+
+    if ($cvKey -and $cvKey.RegisteredOrganization -and $cvKey.RegisteredOrganization.Trim() -ne "") {
+        $orgName = $cvKey.RegisteredOrganization.Trim()
+    } elseif ($csObj -and $csObj.PrimaryOwnerName -and "$($csObj.PrimaryOwnerName)".Trim() -ne "") {
+        $orgName = "$($csObj.PrimaryOwnerName)".Trim() + " (registered owner)"
+    } elseif ($cvKey -and $cvKey.RegisteredOwner -and $cvKey.RegisteredOwner.Trim() -ne "") {
+        $orgName = $cvKey.RegisteredOwner.Trim() + " (registered owner)"
+    } elseif ($csObj -and $csObj.Manufacturer) {
+        $orgName = "$($csObj.Manufacturer)".Trim() + " (manufacturer)"
     }
 } catch {}
 
@@ -409,6 +593,20 @@ try {
     $cfgIndex = @{}
     foreach ($c in $configs) { $cfgIndex[$c.InterfaceIndex] = $c }
 
+    # Connection-specific DNS suffix, used when the adapter reports no DNSDomain
+    $suffixIndex = @{}
+    try {
+        Get-DnsClient -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.ConnectionSpecificSuffix) { $suffixIndex[$_.InterfaceIndex] = $_.ConnectionSpecificSuffix }
+        }
+    } catch {}
+    $csDomain = ""
+    try { $csDomain = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).Domain } catch {}
+
+    # Put adapters that actually hold an IP configuration first, so the row shown
+    # by default is a live one rather than a disconnected NIC full of "Unknown".
+    $adapters = @($adapters | Sort-Object @{ Expression = { if ($cfgIndex[$_.InterfaceIndex]) { 0 } else { 1 } } }, Name)
+
     foreach ($a in $adapters) {
         $speedMbps = "Unknown"
         if ($a.Speed -and $a.Speed -gt 0) {
@@ -422,8 +620,25 @@ try {
             speed          = $speedMbps
             mac_address    = Get-SafeString $a.MACAddress "Unknown"
             gateway        = if ($cfg -and $cfg.DefaultIPGateway) { $cfg.DefaultIPGateway -join ", " } else { "Unknown" }
-            network_mask   = if ($cfg -and $cfg.IPSubnet)         { $cfg.IPSubnet -join ", " }         else { "Unknown" }
-            dns_domain     = if ($cfg)                             { Get-SafeString $cfg.DNSDomain "Unknown" } else { "Unknown" }
+            # IPSubnet mixes IPv4 masks with IPv6 prefix lengths ("255.255.255.0,64,128").
+            # Keep only real dotted-quad masks here so the column means one thing.
+            network_mask   = if ($cfg -and $cfg.IPSubnet) {
+                                 $m4 = @($cfg.IPSubnet | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' })
+                                 if ($m4.Count -gt 0) { $m4 -join ", " } else { "Unknown" }
+                             } else { "Unknown" }
+            ipv6_prefix    = if ($cfg -and $cfg.IPSubnet) {
+                                 $p6 = @($cfg.IPSubnet | Where-Object { $_ -match '^\d{1,3}$' })
+                                 if ($p6.Count -gt 0) { ($p6 | ForEach-Object { "/$_" }) -join ", " } else { "Unknown" }
+                             } else { "Unknown" }
+            # DNSDomain is empty on workgroup machines; fall back to the
+            # connection-specific suffix, then the computer's domain.
+            dns_domain     = $(
+                                 $dd = ""
+                                 if ($cfg -and $cfg.DNSDomain) { $dd = "$($cfg.DNSDomain)".Trim() }
+                                 if (-not $dd -and $suffixIndex[$a.InterfaceIndex]) { $dd = "$($suffixIndex[$a.InterfaceIndex])".Trim() }
+                                 if (-not $dd -and $csDomain -and $csDomain -notmatch '^(WORKGROUP|)$') { $dd = $csDomain }
+                                 if ($dd) { $dd } elseif ($cfg) { "Not configured (workgroup)" } else { "Unknown" }
+                             )
             dns_servers    = if ($cfg -and $cfg.DNSServerSearchOrder) { $cfg.DNSServerSearchOrder -join ", " } else { "Unknown" }
             dhcp_server    = if ($cfg)                             { Get-SafeString $cfg.DHCPServer "Unknown" } else { "Unknown" }
             ipv4_addresses = if ($cfg -and $cfg.IPAddress)        { ($cfg.IPAddress | Where-Object { $_ -match '^\d+\.\d+' }) -join ", " } else { "Unknown" }
@@ -440,6 +655,17 @@ try {
 
 # 16. USB & Connected Peripherals
 Write-Host "Collecting peripheral devices..." -ForegroundColor Cyan
+
+# Win32_PnPEntity does NOT expose a DriverVersion property - reading $dev.DriverVersion
+# always returned empty, so every peripheral reported version "Unknown".
+# Win32_PnPSignedDriver is the class that carries it; key it by DeviceID.
+$driverVerByDeviceId = @{}
+try {
+    Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.DeviceID -and $_.DriverVersion) { $driverVerByDeviceId[$_.DeviceID] = $_.DriverVersion }
+    }
+} catch {}
+
 $peripherals = @()
 try {
     $validClasses = @("HIDClass", "USB", "Printer", "Scanner", "Keyboard", "Mouse", "Image", "Bluetooth")
@@ -451,7 +677,10 @@ try {
             type         = Get-SafeString $dev.PNPClass "Unknown"
             description  = Get-SafeString $dev.Description "Unknown"
             manufacturer = Get-SafeString $dev.Manufacturer "Unknown"
-            version      = Get-SafeString $dev.DriverVersion "Unknown"
+            version      = $(
+                               $dv = $driverVerByDeviceId[$dev.DeviceID]
+                               if ($dv) { $dv } else { "Unknown" }
+                           )
         }
     }
 } catch {}
@@ -554,7 +783,10 @@ try {
             serial_number  = if ($serialNo) { $serialNo } else { "-" }
             device_id      = $devId
             status         = Get-SafeString $dev.Status "Unknown"
-            driver_version = Get-SafeString $dev.DriverVersion "Unknown"
+            driver_version = $(
+                                 $dv2 = $driverVerByDeviceId[$devId]
+                                 if ($dv2) { $dv2 } else { "Unknown" }
+                             )
         }
     }
     # Guard against pathological payload sizes on heavily-populated machines
@@ -609,10 +841,29 @@ Write-Host "Collecting physical disk details..." -ForegroundColor Cyan
 $diskDetails = @()
 try {
     $physDisks = Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue
+
+    # MSFT_PhysicalDisk reports MediaType authoritatively (3=HDD, 4=SSD, 5=SCM).
+    # The old model-name heuristic guessed wrong on drives whose name contains no
+    # marketing keyword - e.g. "KINGSTON OM8PCP3512F-AA", a real NVMe SSD, was
+    # reported as "No". Build a serial-keyed lookup and fall back to the heuristic.
+    $mediaByName = @{}
+    try {
+        Get-CimInstance -Namespace root\Microsoft\Windows\Storage -ClassName MSFT_PhysicalDisk -ErrorAction Stop |
+            ForEach-Object {
+                $mt = switch ([int]$_.MediaType) { 3 { "No" } 4 { "Yes" } 5 { "Yes" } default { "" } }
+                if ($_.FriendlyName) { $mediaByName[$_.FriendlyName.Trim()] = $mt }
+            }
+    } catch {}
+
     foreach ($d in $physDisks) {
         $sizeGB    = if ($d.Size -and $d.Size -gt 0) { [math]::Round($d.Size / 1GB, 2).ToString() + " GB" } else { "Unknown" }
-        # Determine if SSD via model name heuristic (no WMI property for SSD in Win32_DiskDrive)
-        $isSSD = if ($d.MediaType -match "SSD|Solid" -or $d.Model -match "SSD|NVMe|M\.2|SAMSUNG SSD|WD.*SSD|Crucial|Kingston SSD") { "Yes" } else { "No" }
+
+        $isSSD = ""
+        $modelKey = if ($d.Model) { $d.Model.Trim() } else { "" }
+        if ($modelKey -and $mediaByName.ContainsKey($modelKey)) { $isSSD = $mediaByName[$modelKey] }
+        if (-not $isSSD) {
+            $isSSD = if ($d.MediaType -match "SSD|Solid" -or $d.Model -match "SSD|NVMe|M\.2|SAMSUNG SSD|WD.*SSD|Crucial|Kingston SSD") { "Yes" } else { "No" }
+        }
         $interface = Get-SafeString $d.InterfaceType "Unknown"
 
         # Walk DiskDrive -> DiskPartition -> LogicalDisk for the file system and
@@ -803,6 +1054,8 @@ $data = @{
     computer_name         = $computer
     os_name               = $osName
     os_version            = $osVersion
+    service_pack          = $servicePack
+    os_build              = $osBuild
     architecture          = $architecture
     license_status        = $licenseStatus
     hotfixes              = $hotfixes
@@ -827,7 +1080,13 @@ $data = @{
         domain           = $domainName
         domain_role      = $domainRole
         description      = $deviceDesc
-        memory_slots     = $memorySlots
+        device_type         = $deviceType
+        memory_slots        = $memorySlots
+        memory_slot_count   = $memorySlotCount
+        memory_used_slots   = $memoryUsedSlots
+        memory_current_size = $memoryCurrentSize
+        memory_max_size     = $memoryMaxSize
+        memory_modules      = $memoryModules
         last_backup_time = $lastBackup
         scanner_name     = $scannerName
         site             = $siteName

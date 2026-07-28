@@ -1412,6 +1412,7 @@
                         <div>
                             <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Manufacturer / Model</div>
                             <div id="specModel" style="font-size:14px; font-weight:500;">—</div>
+                            <div id="specDeviceType" style="font-size:13px; color:var(--text-2); margin-top:2px;">—</div>
                             <div id="specSerial" style="font-size:13px; color:var(--text-2); margin-top:2px;">—</div>
                         </div>
                         <div>
@@ -1502,6 +1503,7 @@
                         <div>
                             <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Memory Slots</div>
                             <div id="specMemSlots" style="font-size:14px; font-weight:500;">—</div>
+                            <div id="specMemDetail" style="font-size:13px; color:var(--text-2); margin-top:2px;">—</div>
                         </div>
                         <div>
                             <div style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Total Storage</div>
@@ -1523,6 +1525,7 @@
             <div id="dpanel-storage" class="device-tab-panel" style="display:none;">
                 <div class="card" style="margin-bottom:24px;">
                     <div class="card-title" style="margin-bottom:16px;">Disk Information</div>
+                    <div id="storageSummary" style="display:flex; gap:22px; flex-wrap:wrap; margin-bottom:16px; font-size:13px;"></div>
                     <div class="table-wrap">
                         <table>
                             <thead>
@@ -2765,7 +2768,16 @@ async function loadSoftwareForDevice() {
         document.getElementById('specDeviceName').textContent = name;
         document.getElementById('specDescription').textContent = hw.description || '—';
         document.getElementById('specOs').textContent = data.os_name || '—';
-        document.getElementById('specOsVer').textContent = data.os_version ? `Build ${data.os_version}` : '—';
+        const _sp = data.service_pack && !['None','Not Applicable','Unknown',''].includes(data.service_pack)
+            ? `  |  Service Pack: ${data.service_pack}` : '';
+        // Prefer the readable feature version ("25H2 (Build 26200.8894)") over the
+        // raw kernel version, falling back when the platform has no equivalent.
+        const _ver = (data.os_build && data.os_build !== 'Unknown')
+            ? `${data.os_build}  |  v${data.os_version}`
+            : (data.os_version ? `Build ${data.os_version}` : '');
+        document.getElementById('specOsVer').textContent = _ver ? `${_ver}${_sp}` : '—';
+        document.getElementById('specDeviceType').textContent = hw.device_type && hw.device_type !== 'Unknown'
+            ? hw.device_type : '—';
         document.getElementById('specModel').textContent = (hw.manufacturer && hw.model) ? `${hw.manufacturer} ${hw.model}` : '—';
         document.getElementById('specSerial').textContent = hw.serial_number ? `S/N: ${hw.serial_number}` : '—';
         document.getElementById('specDomain').textContent = hw.domain || '—';
@@ -2822,9 +2834,28 @@ async function loadSoftwareForDevice() {
         document.getElementById('specProcType').textContent = hw.processor_type || '—';
         document.getElementById('specRam').textContent = hw.ram || '—';
         document.getElementById('specMemSlots').textContent = hw.memory_slots || '—';
+        // Excel asks for slot count, current size and max size as separate values
+        const _mem = [
+            hw.memory_slot_count   ? `Slots: ${hw.memory_slot_count}`   : '',
+            hw.memory_used_slots && hw.memory_used_slots !== 'Unknown' ? `Used: ${hw.memory_used_slots}` : '',
+            hw.memory_current_size ? `Current: ${hw.memory_current_size}` : '',
+            hw.memory_max_size     ? `Max: ${hw.memory_max_size}`       : '',
+        ].filter(Boolean).join('   |   ');
+        document.getElementById('specMemDetail').textContent = _mem || '—';
         document.getElementById('specDisk').textContent = hw.disk || '—';
         document.getElementById('specBiosVer').textContent = hw.bios_version || '—';
         document.getElementById('specBiosDate').textContent = hw.bios_date || '—';
+
+        // --- Storage totals (Excel: whether it's solid state -> aggregate) ---
+        const ss = data.storage_summary || {};
+        const _tile = (label, value, tone) =>
+            `<div><div style="color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">${label}</div>` +
+            `<div style="font-size:15px; font-weight:700; color:${tone || 'var(--text)'};">${esc(value || '—')}</div></div>`;
+        document.getElementById('storageSummary').innerHTML =
+            _tile('Total Storage', ss.storage_total) +
+            _tile(`SSD (${ss.ssd_count || 0})`, ss.ssd_total_size, 'var(--success)') +
+            _tile(`HDD (${ss.hdd_count || 0})`, ss.hdd_total_size) +
+            _tile('Physical Disks', ss.disk_count);
 
         // --- Storage tab: Disk Details (Excel: Disk Information) ---
         const disks = hw.disk_details || [];

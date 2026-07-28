@@ -28,6 +28,57 @@ fi
 
 LICENSE_STATUS="Not Applicable"
 
+# Excel: "OS name, version, service pack versions".
+# Service packs are a Windows-only concept.
+SERVICE_PACK="Not Applicable"
+
+# Readable build identifier, mirroring the Windows "25H2 (Build 26200.8894)".
+OS_BUILD="Unknown"
+if [ "$OS_NAME" = "macOS" ]; then
+    _BUILD=$(sw_vers -buildVersion 2>/dev/null)
+    _PROD=$(sw_vers -productVersion 2>/dev/null)
+    [ -n "$_PROD" ] && OS_BUILD="${_PROD}${_BUILD:+ (Build ${_BUILD})}"
+else
+    _KREL=$(uname -r 2>/dev/null)
+    _PRETTY=$(awk -F'=' '/^PRETTY_NAME=/{gsub(/"/,"",$2); print $2}' /etc/os-release 2>/dev/null)
+    if [ -n "$_PRETTY" ]; then OS_BUILD="${_PRETTY}${_KREL:+ (kernel ${_KREL})}"
+    elif [ -n "$_KREL" ]; then OS_BUILD="kernel ${_KREL}"
+    fi
+fi
+
+# Excel: Device Data -> "device type"
+DEVICE_TYPE="Unknown"
+if [ "$OS_NAME" = "macOS" ]; then
+    _HWMODEL=$(sysctl -n hw.model 2>/dev/null)
+    case "$_HWMODEL" in
+        *Book*)                     DEVICE_TYPE="Laptop" ;;
+        *Mini*|*mini*)              DEVICE_TYPE="Desktop (Mac mini)" ;;
+        *iMac*)                     DEVICE_TYPE="All-in-One (iMac)" ;;
+        *Pro*)                      DEVICE_TYPE="Workstation (Mac Pro)" ;;
+        *Studio*)                   DEVICE_TYPE="Desktop (Mac Studio)" ;;
+        *)                          DEVICE_TYPE="Desktop" ;;
+    esac
+else
+    # DMI chassis_type is the same numbering Windows uses for ChassisTypes
+    _CHASSIS_NUM=""
+    [ -r /sys/class/dmi/id/chassis_type ] && _CHASSIS_NUM=$(cat /sys/class/dmi/id/chassis_type 2>/dev/null | tr -d ' \n')
+    case "$_CHASSIS_NUM" in
+        3|4|5|6|7|15|16)            DEVICE_TYPE="Desktop" ;;
+        8|9|10|11|12|14|18|21)      DEVICE_TYPE="Laptop" ;;
+        13)                         DEVICE_TYPE="All-in-One" ;;
+        17|23|28)                   DEVICE_TYPE="Server" ;;
+        30|31|32)                   DEVICE_TYPE="Tablet" ;;
+        *)                          DEVICE_TYPE="Unknown" ;;
+    esac
+    # A container or VM is more useful to report than an emulated chassis
+    if [ -f /.dockerenv ] || grep -qaE 'docker|lxc|kubepods' /proc/1/cgroup 2>/dev/null; then
+        DEVICE_TYPE="Container"
+    elif command -v systemd-detect-virt >/dev/null 2>&1; then
+        _VIRT=$(systemd-detect-virt 2>/dev/null)
+        [ -n "$_VIRT" ] && [ "$_VIRT" != "none" ] && DEVICE_TYPE="Virtual Machine ($_VIRT)"
+    fi
+fi
+
 # ── MAC Address ───────────────────────────────────────────────────────────────
 MAC_ADDRESS="Unknown"
 if command -v ifconfig >/dev/null 2>&1; then
@@ -170,13 +221,28 @@ if [ "$OS_NAME" = "macOS" ]; then
     GPU_NAME=$(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Chipset Model/{print $2}' | head -1 | sed 's/^ *//')
     GPU_VRAM=$(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/VRAM \(Total\)/{print $2}' | head -1 | sed 's/^ *//')
     GPU_DRIVER=$(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Driver Version/{print $2}' | head -1 | sed 's/^ *//')
+    # Apple ships the graphics driver inside macOS - there is no separate
+    # version to report - so state that instead of leaving "Unknown".
+    if [ -z "$GPU_DRIVER" ]; then
+        _METAL=$(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Metal/{print $2; exit}' | sed 's/^ *//')
+        if [ -n "$_METAL" ]; then GPU_DRIVER="Built-in (macOS ${OS_VERSION}, Metal ${_METAL})"
+        else GPU_DRIVER="Built-in (macOS ${OS_VERSION})"; fi
+    fi
     if [ -n "$GPU_NAME" ]; then
         GPU_JSON="[{\"name\":\"${GPU_NAME}\",\"device_name\":\"${GPU_NAME}\",\"video_processor\":\"Unknown\",\"driver_version\":\"${GPU_DRIVER:-Unknown}\",\"vram\":\"${GPU_VRAM:-Unknown}\"}]"
     fi
 elif command -v lspci >/dev/null 2>&1; then
     GPU_NAME=$(lspci 2>/dev/null | grep -i 'VGA\|3D\|Display' | head -1 | sed 's/.*: //' | sed 's/"/\\"/g')
+    # Excel field "drivers": lspci -k names the kernel module actually bound to the
+    # card, and modinfo gives its version. Previously hardcoded to "Unknown".
+    GPU_DRIVER=$(lspci -k 2>/dev/null | awk '/VGA|3D|Display/{f=1} f && /Kernel driver in use/{print $NF; exit}')
+    if [ -n "$GPU_DRIVER" ]; then
+        _DRV_VER=$(modinfo "$GPU_DRIVER" 2>/dev/null | awk -F': *' '/^version:/{print $2; exit}')
+        [ -n "$_DRV_VER" ] && GPU_DRIVER="$GPU_DRIVER $_DRV_VER"
+    fi
+    [ -z "$GPU_DRIVER" ] && GPU_DRIVER="Unknown"
     if [ -n "$GPU_NAME" ]; then
-        GPU_JSON="[{\"name\":\"${GPU_NAME}\",\"device_name\":\"${GPU_NAME}\",\"video_processor\":\"Unknown\",\"driver_version\":\"Unknown\",\"vram\":\"Unknown\"}]"
+        GPU_JSON="[{\"name\":\"${GPU_NAME}\",\"device_name\":\"${GPU_NAME}\",\"video_processor\":\"Unknown\",\"driver_version\":\"${GPU_DRIVER}\",\"vram\":\"Unknown\"}]"
     fi
 fi
 
@@ -193,9 +259,20 @@ DEVICE_DESC="Unknown"
 NUM_PROCESSORS="Unknown"
 PROCESSOR_TYPE="Unknown"
 MEMORY_SLOTS="Unknown"
+MEMORY_SLOT_COUNT="Unknown"
+MEMORY_USED_SLOTS="Unknown"
+MEMORY_CURRENT_SIZE="Unknown"
+MEMORY_MAX_SIZE="Unknown"
 LAST_BOOT_TIME="Unknown"
 LAST_BACKUP_TIME="Unknown"
 SCANNER_NAME="Prevoyance Inspection"
+# Excel note: "which scanner identified the asset" - record the agent build,
+# the platform, and whether it ran unattended or by hand.
+_SCAN_MODE="Manual"
+if [ -f /var/lib/nsdl-audit/device.id ] || [ -f "/Library/Application Support/NSDLAudit/device.id" ]; then
+    _SCAN_MODE="Scheduled Agent"
+fi
+SCANNER_NAME="Prevoyance Inspection v3.1.0 (${OS_NAME} ${_SCAN_MODE})"
 SITE_NAME="Unknown"
 ORG_NAME="Unknown"
 DEVICE_LOCATION="Unknown"
@@ -230,6 +307,10 @@ if [ "$OS_NAME" = "macOS" ]; then
         _MEM_TYPE=$(system_profiler SPMemoryDataType 2>/dev/null | awk -F': ' '/ Type:/{print $2; exit}' | sed 's/^ *//')
         [ -z "$_MEM_TOTAL" ] && _MEM_TOTAL="$RAM"
         MEMORY_SLOTS="Unified memory (soldered) — ${_MEM_TOTAL}${_MEM_TYPE:+ $_MEM_TYPE}"
+        MEMORY_SLOT_COUNT="Not Applicable (soldered)"
+        MEMORY_USED_SLOTS="Not Applicable (soldered)"
+        MEMORY_CURRENT_SIZE="${_MEM_TOTAL}"
+        MEMORY_MAX_SIZE="${_MEM_TOTAL} (not upgradeable)"
     fi
 
     # Apple firmware exposes a version but never a release date — say so rather
@@ -348,12 +429,54 @@ else
         MEMORY_SLOTS=$(dmidecode -t memory 2>/dev/null | grep -E 'Size:|Type:|Speed:' | paste - - - | head -4 | sed 's/\t/,/g' | tr '\n' ';')
     fi
     # Pre-seeded to "Unknown" further up, so an empty-check alone never fires
+    # Slot count / max size come from DMI, which is world-readable for the array
+    # even when dmidecode (root-only) is unavailable.
+    if [ -r /sys/devices/system/memory ] || true; then
+        _SLOTS=$(ls -1 /sys/firmware/dmi/entries 2>/dev/null | grep -c '^17-' || echo "")
+        [ -n "$_SLOTS" ] && [ "$_SLOTS" != "0" ] && MEMORY_SLOT_COUNT="$_SLOTS"
+    fi
+    if command -v dmidecode >/dev/null 2>&1; then
+        _MS=$(dmidecode -t 16 2>/dev/null | awk -F': ' '/Number Of Devices/{print $2; exit}' | tr -d ' ')
+        [ -n "$_MS" ] && MEMORY_SLOT_COUNT="$_MS"
+        _MX=$(dmidecode -t 16 2>/dev/null | awk -F': ' '/Maximum Capacity/{print $2; exit}' | sed 's/^ *//')
+        [ -n "$_MX" ] && MEMORY_MAX_SIZE="$_MX"
+        _US=$(dmidecode -t 17 2>/dev/null | grep -c '^Memory Device$')
+        [ -n "$_US" ] && [ "$_US" != "0" ] && MEMORY_USED_SLOTS="$_US"
+    fi
+    MEMORY_CURRENT_SIZE="$RAM"
+    [ "$MEMORY_MAX_SIZE" = "Unknown" ] && MEMORY_MAX_SIZE="Unknown (requires root)"
+    [ "$MEMORY_SLOT_COUNT" = "Unknown" ] && MEMORY_SLOT_COUNT="Unknown (requires root)"
     if [ -z "$MEMORY_SLOTS" ] || [ "$MEMORY_SLOTS" = "Unknown" ]; then
         MEMORY_SLOTS="Total ${RAM} (per-slot detail requires root)"
     fi
 
-    # Linux has no standard backup agent to query
-    LAST_BACKUP_TIME="Not Applicable (no backup agent)"
+    # Linux has no single standard backup agent, but the common ones leave a
+    # timestamp behind. Check those before declaring nothing is configured.
+    LAST_BACKUP_TIME=""
+    # Timeshift snapshots
+    if [ -d /timeshift/snapshots ]; then
+        _TS=$(ls -1t /timeshift/snapshots 2>/dev/null | head -1)
+        [ -n "$_TS" ] && LAST_BACKUP_TIME="$_TS (Timeshift)"
+    fi
+    # Snapper (openSUSE / btrfs)
+    if [ -z "$LAST_BACKUP_TIME" ] && command -v snapper >/dev/null 2>&1; then
+        _SN=$(snapper list 2>/dev/null | tail -1 | awk -F'|' '{gsub(/^ +| +$/,"",$4); print $4}')
+        [ -n "$_SN" ] && LAST_BACKUP_TIME="$_SN (Snapper)"
+    fi
+    # Duplicity / Borg / restic / rsnapshot caches
+    if [ -z "$LAST_BACKUP_TIME" ]; then
+        for _d in "$HOME/.cache/duplicity" "$HOME/.cache/borg" "$HOME/.cache/restic" /var/cache/rsnapshot; do
+            if [ -d "$_d" ]; then
+                _M=$(find "$_d" -maxdepth 2 -type f -printf '%TY-%Tm-%Td %TH:%TM
+' 2>/dev/null | sort -r | head -1)
+                if [ -n "$_M" ]; then
+                    LAST_BACKUP_TIME="$_M ($(basename "$_d"))"
+                    break
+                fi
+            fi
+        done
+    fi
+    [ -z "$LAST_BACKUP_TIME" ] && LAST_BACKUP_TIME="No backup agent configured"
 
     LAST_BOOT_TIME=$(who -b 2>/dev/null | awk '{print $3,$4}' | head -1)
     [ -z "$LAST_BOOT_TIME" ] && LAST_BOOT_TIME=$(uptime -s 2>/dev/null || echo "Unknown")
@@ -367,7 +490,7 @@ else
 fi
 
 # Scanner Name
-SCANNER_NAME="Prevoyance Inspection"
+# SCANNER_NAME is set once near the top with agent version and scan mode.
 
 # Site — timezone region
 if [ "$OS_NAME" = "macOS" ]; then
@@ -388,6 +511,21 @@ if [ "$OS_NAME" = "macOS" ]; then
     [ -z "$ORG_NAME" ] && ORG_NAME=$(dsconfigad -show 2>/dev/null | awk -F'=' '/Active Directory Forest/{print $2}' | sed 's/^ *//' | tr -d '\n')
 else
     ORG_NAME=$(hostname -d 2>/dev/null | tr -d '\n')
+fi
+# Fall back to the hardware owner/manufacturer when no organisation is set,
+# rather than reporting a bare "Unknown".
+case "$(printf '%s' "$ORG_NAME" | tr '[:upper:]' '[:lower:]')" in
+    ''|unknown|localdomain|local|localhost|\(none\)) ORG_NAME="" ;;
+esac
+if [ -z "$ORG_NAME" ]; then
+    if [ "$OS_NAME" = "macOS" ]; then
+        _OWNER=$(defaults read /Library/Preferences/com.apple.RemoteDesktop SystemInformationOwner 2>/dev/null)
+        [ -n "$_OWNER" ] && ORG_NAME="$_OWNER (registered owner)"
+        [ -z "$_OWNER" ] && ORG_NAME="Apple Inc. (manufacturer)"
+    else
+        _VENDOR=$(_clean_dmi "$(_dmi sys_vendor)" 2>/dev/null)
+        [ -n "$_VENDOR" ] && ORG_NAME="$_VENDOR (manufacturer)"
+    fi
 fi
 [ -z "$ORG_NAME" ] && ORG_NAME="Unknown"
 
@@ -473,6 +611,13 @@ BIOS_DATE=$(json_safe "$BIOS_DATE")
 ASSET_TAG=$(json_safe "$ASSET_TAG")
 PROCESSOR_TYPE=$(json_safe "$PROCESSOR_TYPE")
 MEMORY_SLOTS=$(json_safe "$MEMORY_SLOTS")
+MEMORY_SLOT_COUNT=$(json_safe "$MEMORY_SLOT_COUNT")
+MEMORY_USED_SLOTS=$(json_safe "$MEMORY_USED_SLOTS")
+MEMORY_CURRENT_SIZE=$(json_safe "$MEMORY_CURRENT_SIZE")
+MEMORY_MAX_SIZE=$(json_safe "$MEMORY_MAX_SIZE")
+DEVICE_TYPE=$(json_safe "$DEVICE_TYPE")
+SERVICE_PACK=$(json_safe "$SERVICE_PACK")
+OS_BUILD=$(json_safe "$OS_BUILD")
 LAST_BOOT_TIME=$(json_safe "$LAST_BOOT_TIME")
 LAST_BACKUP_TIME=$(json_safe "$LAST_BACKUP_TIME")
 NUM_PROCESSORS=$(json_safe "$NUM_PROCESSORS")
@@ -512,6 +657,13 @@ try:
                     ip4 = ipres.stdout.strip() or "Unknown"
                 except: pass
                 try:
+                    mres = subprocess.run(['ipconfig', 'getoption', device, 'subnet_mask'],
+                                          capture_output=True, text=True, timeout=5)
+                    cand = mres.stdout.strip()
+                    if cand and cand.count('.') == 3:
+                        mask = cand
+                except: pass
+                try:
                     gwres = subprocess.run(['route', '-n', 'get', 'default'], capture_output=True, text=True, timeout=5)
                     for gl in gwres.stdout.splitlines():
                         if 'gateway:' in gl: gw = gl.split(':', 1)[1].strip()
@@ -535,7 +687,15 @@ try:
                             mp = il.split()
                             for idx, w in enumerate(mp):
                                 if w == 'netmask' and idx+1 < len(mp):
-                                    mask = mp[idx+1]
+                                    raw = mp[idx+1]
+                                    # macOS prints the mask in hex (0xffffff00);
+                                    # the report needs a dotted quad.
+                                    if raw.lower().startswith('0x') and len(raw) == 10:
+                                        v = int(raw, 16)
+                                        mask = '.'.join(str((v >> sh) & 0xff)
+                                                        for sh in (24, 16, 8, 0))
+                                    else:
+                                        mask = raw
                         if 'inet6' in il and 'fe80' not in il:
                             p6 = il.split()
                             if len(p6) >= 2: ip6 = p6[1].split('%')[0]
@@ -558,12 +718,29 @@ PYEOF
         NETWORK_ADAPTERS_JSON=$(python3 - <<'PYEOF'
 import subprocess, json, re
 adapters = []
+
+
+def prefix_to_mask(bits):
+    """/24 -> 255.255.255.0. `ip addr` reports a prefix, the Excel field wants a mask."""
+    try:
+        bits = int(bits)
+        if not 0 <= bits <= 32:
+            return "Unknown"
+        v = (0xffffffff << (32 - bits)) & 0xffffffff if bits else 0
+        return '.'.join(str((v >> s) & 0xff) for s in (24, 16, 8, 0))
+    except Exception:
+        return "Unknown"
+
+
 try:
     r = subprocess.run(['ip', 'addr', 'show'], capture_output=True, text=True, timeout=10)
-    iface = ""; mac = ""; ipv4 = []; ipv6 = []; mtu = "Unknown"
-    def flush(iface, mac, ipv4, ipv6, mtu):
+    iface = ""; mac = ""; ipv4 = []; ipv6 = []; mtu = "Unknown"; pfx = []
+    def flush(iface, mac, ipv4, ipv6, mtu, pfx=()):
         if iface and iface != 'lo':
-            gw = "Unknown"; dns = "Unknown"; dns_domain = "Unknown"; mask = "Unknown"
+            gw = "Unknown"; dns = "Unknown"; dns_domain = "Unknown"
+            # mask was declared but never assigned, so every Linux adapter
+            # reported "Unknown". Derive it from the CIDR prefix.
+            mask = prefix_to_mask(pfx[0]) if pfx else "Unknown"
             try:
                 gr = subprocess.run(['ip', 'route', 'show', 'dev', iface], capture_output=True, text=True, timeout=5)
                 for gl in gr.stdout.splitlines():
@@ -591,16 +768,19 @@ try:
     for line in r.stdout.splitlines():
         m = re.match(r'^\d+: (\S+):', line)
         if m:
-            if iface: flush(iface, mac, ipv4, ipv6, mtu)
-            iface = m.group(1).rstrip(':'); mac = "Unknown"; ipv4 = []; ipv6 = []; mtu = "Unknown"
+            if iface: flush(iface, mac, ipv4, ipv6, mtu, pfx)
+            iface = m.group(1).rstrip(':'); mac = "Unknown"; ipv4 = []; ipv6 = []; mtu = "Unknown"; pfx = []
             mt = re.search(r'mtu (\d+)', line)
             if mt: mtu = mt.group(1)
         if 'link/ether' in line: mac = line.split()[1]
         ia = re.match(r'\s+inet (\S+)', line)
-        if ia: ipv4.append(ia.group(1).split('/')[0])
+        if ia:
+            addr = ia.group(1)
+            ipv4.append(addr.split('/')[0])
+            if '/' in addr: pfx.append(addr.split('/')[1])
         ia6 = re.match(r'\s+inet6 (\S+)', line)
         if ia6 and 'fe80' not in ia6.group(1): ipv6.append(ia6.group(1).split('/')[0])
-    if iface: flush(iface, mac, ipv4, ipv6, mtu)
+    if iface: flush(iface, mac, ipv4, ipv6, mtu, pfx)
 except Exception as e:
     pass
 print(json.dumps(adapters))
@@ -791,8 +971,24 @@ try:
                        capture_output=True, text=True, timeout=10)
     data = json.loads(r.stdout)
     for d in data.get('blockdevices', []):
-        is_ssd = "Yes" if d.get('rota') == "0" else "No"
         name = d.get('name', '')
+        # Skip snap/loop mounts, ramdisks and CD devices - they are not physical
+        # disks and were padding the list with dozens of 4K/200M entries.
+        if name.startswith(('loop', 'ram', 'sr', 'fd', 'zram')):
+            continue
+
+        # `rota` may arrive as a string, a bool or null depending on lsblk build;
+        # /sys/block/<dev>/queue/rotational is the authoritative source.
+        is_ssd = "Unknown"
+        try:
+            with open('/sys/block/%s/queue/rotational' % name) as rf:
+                is_ssd = "No" if rf.read().strip() == "1" else "Yes"
+        except Exception:
+            rota = d.get('rota')
+            if rota in ("0", 0, False):
+                is_ssd = "Yes"
+            elif rota in ("1", 1, True):
+                is_ssd = "No" 
         # Get filesystem from first partition
         fs = "Unknown"
         try:
@@ -845,9 +1041,10 @@ PERIPHERALS_JSON="[]"
 if command -v python3 >/dev/null 2>&1; then
     if [ "$OS_NAME" = "macOS" ]; then
         PERIPHERALS_JSON=$(python3 - <<'PYEOF'
-import subprocess, json
+import subprocess, json, platform
 peripherals = []
 seen = set()
+OS_VER = platform.mac_ver()[0] or 'Unknown'
 
 
 def sp(datatype):
@@ -893,21 +1090,31 @@ walk_usb(sp('SPUSBDataType'))
 # Built-in hardware. A MacBook with nothing plugged in has no external USB at all,
 # so a USB-only scan reported zero peripherals — the keyboard, trackpad, camera,
 # speakers and display are all internal and were invisible.
+# Built-in devices carry no bcdDevice, so report the firmware/revision each
+# profile does expose - otherwise every non-USB peripheral showed version
+# "Unknown", which the Excel spec asks for.
 for cam in sp('SPCameraDataType'):
-    add(cam.get('_name', ''), 'Camera (Built-in)', 'Built-in camera', 'Apple Inc.')
+    add(cam.get('_name', ''), 'Camera (Built-in)', 'Built-in camera', 'Apple Inc.',
+        cam.get('spcamera_unique-id', '') or OS_VER)
 
 for audio in sp('SPAudioDataType'):
     for dev in audio.get('_items', []) or []:
         nm = dev.get('_name', '')
         direction = dev.get('coreaudio_device_transport', '') or ''
         kind = 'Audio (Built-in)' if 'built' in direction.lower() or not direction else 'Audio'
-        add(nm, kind, 'Audio device', dev.get('coreaudio_device_manufacturer', 'Apple Inc.'))
+        ver = (dev.get('coreaudio_device_firmware_version')
+               or dev.get('coreaudio_device_srate') or OS_VER)
+        add(nm, kind, 'Audio device',
+            dev.get('coreaudio_device_manufacturer', 'Apple Inc.'), str(ver))
 
 for gpu in sp('SPDisplaysDataType'):
     for disp in gpu.get('spdisplays_ndrvs', []) or []:
         nm = disp.get('_name', '')
         internal = 'built' in str(disp.get('spdisplays_display_type', '')).lower()
-        add(nm, 'Display (Built-in)' if internal else 'Display', 'Display panel', 'Apple Inc.')
+        ver = (disp.get('_spdisplays_display-firmware-version')
+               or disp.get('_spdisplays_pixels') or OS_VER)
+        add(nm, 'Display (Built-in)' if internal else 'Display', 'Display panel',
+            'Apple Inc.', str(ver))
 
 for bt in sp('SPBluetoothDataType'):
     for group in (bt.get('device_title') or []):
@@ -915,7 +1122,9 @@ for bt in sp('SPBluetoothDataType'):
             for nm, info in group.items():
                 info = info or {}
                 add(nm, 'Bluetooth', info.get('device_minorType', 'Bluetooth device'),
-                    info.get('device_vendorID', 'Unknown'))
+                    info.get('device_vendorID', 'Unknown'),
+                    str(info.get('device_firmwareVersion')
+                        or info.get('device_productID') or 'Unknown'))
 
 # Keyboard / trackpad — on Apple Silicon these sit on an internal bus, not USB
 for hw in sp('SPHardwareDataType'):
@@ -1543,6 +1752,8 @@ JSON=$(cat <<EOF
     "computer_name": "$COMPUTER_NAME",
     "os_name": "$OS_NAME",
     "os_version": "$OS_VERSION",
+    "service_pack": "$SERVICE_PACK",
+    "os_build": "$OS_BUILD",
     "architecture": "$ARCHITECTURE",
     "license_status": "$LICENSE_STATUS",
     "hotfixes": $HOTFIXES_JSON,
@@ -1567,7 +1778,12 @@ JSON=$(cat <<EOF
         "domain": "$DOMAIN_NAME",
         "domain_role": "$DOMAIN_ROLE",
         "description": "$DEVICE_DESC",
+        "device_type": "$DEVICE_TYPE",
         "memory_slots": "$MEMORY_SLOTS",
+        "memory_slot_count": "$MEMORY_SLOT_COUNT",
+        "memory_used_slots": "$MEMORY_USED_SLOTS",
+        "memory_current_size": "$MEMORY_CURRENT_SIZE",
+        "memory_max_size": "$MEMORY_MAX_SIZE",
         "last_backup_time": "$LAST_BACKUP_TIME",
         "scanner_name": "$SCANNER_NAME",
         "site": "$SITE_NAME",
