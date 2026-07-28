@@ -691,6 +691,155 @@ PYEOF
     fi
 fi
 
+# ── All Connected Devices (any port: USB, PCI, display, Bluetooth, serial) ───
+# The peripherals list above only covers USB. This captures everything attached
+# to any port — including a projector or external monitor on HDMI/VGA/DP.
+echo "Collecting all connected devices..."
+CONNECTED_DEVICES_JSON="[]"
+if command -v python3 >/dev/null 2>&1; then
+    if [ "$OS_NAME" = "macOS" ]; then
+        CONNECTED_DEVICES_JSON=$(python3 - <<'PYEOF'
+import subprocess, json
+devices = []
+
+def sp(datatype):
+    try:
+        r = subprocess.run(['system_profiler', datatype, '-json'],
+                           capture_output=True, text=True, timeout=30)
+        return json.loads(r.stdout).get(datatype, [])
+    except Exception:
+        return []
+
+def add(name, dclass, connection, port='-', manufacturer='Unknown',
+        description='Unknown', serial='-', device_id='', driver=''):
+    if name:
+        devices.append({
+            'name': name, 'device_class': dclass, 'description': description,
+            'manufacturer': manufacturer, 'connection': connection, 'port': port,
+            'serial_number': serial or '-', 'device_id': device_id,
+            'status': 'OK', 'driver_version': driver or 'Unknown',
+        })
+
+def walk_usb(items):
+    for it in items:
+        name = it.get('_name', '')
+        if name and 'hub' not in name.lower():
+            add(name, 'USB', 'USB',
+                port=it.get('location_id', '-') or '-',
+                manufacturer=it.get('manufacturer', 'Unknown') or 'Unknown',
+                description=name,
+                serial=it.get('serial_num', '-') or '-')
+        walk_usb(it.get('_items', []))
+
+walk_usb(sp('SPUSBDataType'))
+
+# Displays — an attached projector appears here with its connection type
+for gpu in sp('SPDisplaysDataType'):
+    for d in gpu.get('spdisplays_ndrvs', []):
+        name = d.get('_name', '')
+        conn = d.get('spdisplays_connection_type', '') or 'Display Output'
+        conn = (conn.replace('spdisplays_', '').replace('_', ' ').strip().upper()
+                or 'Display Output')
+        if d.get('spdisplays_display_type') == 'spdisplays_built-in-retina-LCD':
+            conn = 'Internal Panel'
+        add(name, 'Monitor', conn, port=conn,
+            description=d.get('_spdisplays_display-product-id', 'Unknown') or 'Unknown',
+            serial=d.get('_spdisplays_display-serial-number', '-') or '-')
+
+for b in sp('SPBluetoothDataType'):
+    for dev in (b.get('device_title') or []):
+        for name, info in dev.items():
+            add(name, 'Bluetooth', 'Bluetooth',
+                manufacturer=(info or {}).get('device_vendorID', 'Unknown'),
+                description=(info or {}).get('device_minorType', 'Unknown'))
+
+for t in sp('SPThunderboltDataType'):
+    add(t.get('_name', ''), 'Thunderbolt', 'Thunderbolt')
+
+print(json.dumps(devices[:200]))
+PYEOF
+)
+    else
+        CONNECTED_DEVICES_JSON=$(python3 - <<'PYEOF'
+import subprocess, json, os, glob, re
+devices = []
+
+def run(cmd, timeout=15):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception:
+        return ''
+
+def add(name, dclass, connection, port='-', manufacturer='Unknown',
+        description='Unknown', serial='-', device_id=''):
+    if name:
+        devices.append({
+            'name': name, 'device_class': dclass, 'description': description,
+            'manufacturer': manufacturer, 'connection': connection, 'port': port,
+            'serial_number': serial or '-', 'device_id': device_id,
+            'status': 'OK', 'driver_version': 'Unknown',
+        })
+
+# USB
+for line in run(['lsusb']).splitlines():
+    m = re.match(r'Bus (\S+) Device (\S+): ID (\S+) ?(.*)', line)
+    if m and 'root hub' not in (m.group(4) or '').lower():
+        add(m.group(4).strip() or 'USB Device', 'USB', 'USB',
+            port='Bus %s Device %s' % (m.group(1), m.group(2)),
+            description=m.group(4).strip() or 'Unknown', device_id=m.group(3))
+
+# PCI / PCIe slots
+for line in run(['lspci']).splitlines():
+    m = re.match(r'(\S+) ([^:]+): (.+)', line)
+    if m:
+        add(m.group(3).strip(), m.group(2).strip(), 'PCI / PCIe Slot',
+            port=m.group(1), description=m.group(3).strip(), device_id=m.group(1))
+
+# Displays — /sys/class/drm reports each output and whether something is plugged in.
+# This is where an attached projector shows up (e.g. card0-HDMI-A-1 -> connected).
+for status_path in sorted(glob.glob('/sys/class/drm/card*/status')):
+    try:
+        with open(status_path) as f:
+            if f.read().strip() != 'connected':
+                continue
+    except Exception:
+        continue
+    output = os.path.basename(os.path.dirname(status_path))
+    port = output.split('-', 1)[1] if '-' in output else output
+    conn = 'Internal Panel' if port.startswith(('eDP', 'LVDS')) else port.split('-')[0]
+    name = 'Display on %s' % port
+    # EDID gives the real monitor/projector model when the kernel exposes it
+    edid_path = os.path.join(os.path.dirname(status_path), 'edid')
+    try:
+        edid = open(edid_path, 'rb').read()
+        if len(edid) >= 128:
+            for off in (0x36, 0x48, 0x5A, 0x6C):
+                if edid[off:off + 3] == b'\x00\x00\x00' and edid[off + 3] == 0xFC:
+                    text = edid[off + 5:off + 18].split(b'\n')[0].decode('ascii', 'ignore').strip()
+                    if text:
+                        name = text
+                    break
+    except Exception:
+        pass
+    add(name, 'Monitor', conn, port=port, description='Display output %s' % port)
+
+# Serial / COM ports
+for dev in sorted(glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyS[0-9]')):
+    add(os.path.basename(dev), 'Ports', 'Serial', port=os.path.basename(dev),
+        description='Serial port %s' % dev)
+
+# Bluetooth
+for line in run(['bluetoothctl', 'devices'], timeout=10).splitlines():
+    m = re.match(r'Device (\S+) (.+)', line.strip())
+    if m:
+        add(m.group(2).strip(), 'Bluetooth', 'Bluetooth', device_id=m.group(1))
+
+print(json.dumps(devices[:200]))
+PYEOF
+)
+    fi
+fi
+
 # ────────────────────────────────────────────────────────────────────────────
 #  PHASE 2 — ANTIVIRUS DETECTION
 # ────────────────────────────────────────────────────────────────────────────
@@ -1095,6 +1244,7 @@ PRINTERS=$(json_fragment "$PRINTERS" "[]")
 GPU_JSON=$(json_fragment "$GPU_JSON" "[]")
 NETWORK_ADAPTERS_JSON=$(json_fragment "$NETWORK_ADAPTERS_JSON" "[]")
 PERIPHERALS_JSON=$(json_fragment "$PERIPHERALS_JSON" "[]")
+CONNECTED_DEVICES_JSON=$(json_fragment "$CONNECTED_DEVICES_JSON" "[]")
 DISK_PARTITIONS_JSON=$(json_fragment "$DISK_PARTITIONS_JSON" "[]")
 DISK_DETAILS_JSON=$(json_fragment "$DISK_DETAILS_JSON" "[]")
 NETWORK_DETAILS=$(json_fragment "$NETWORK_DETAILS" "[]")
@@ -1152,6 +1302,7 @@ JSON=$(cat <<EOF
         "gpu_details": $GPU_JSON,
         "network_adapters": $NETWORK_ADAPTERS_JSON,
         "peripherals": $PERIPHERALS_JSON,
+        "connected_devices": $CONNECTED_DEVICES_JSON,
         "disk_partitions": $DISK_PARTITIONS_JSON,
         "disk_details": $DISK_DETAILS_JSON
     },

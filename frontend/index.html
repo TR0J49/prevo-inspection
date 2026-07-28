@@ -1350,6 +1350,7 @@
                     <button class="btn btn-sm btn-outline" id="dtab-network" onclick="switchDeviceTab('network')" style="border-radius:8px 8px 0 0;">Network</button>
                     <button class="btn btn-sm btn-outline" id="dtab-peripherals" onclick="switchDeviceTab('peripherals')" style="border-radius:8px 8px 0 0;">Peripherals</button>
                     <button class="btn btn-sm btn-outline" id="dtab-printers" onclick="switchDeviceTab('printers')" style="border-radius:8px 8px 0 0;">Printers</button>
+                    <button class="btn btn-sm btn-outline" id="dtab-connected" onclick="switchDeviceTab('connected')" style="border-radius:8px 8px 0 0;">Connected Devices</button>
                     <button class="btn btn-sm btn-outline" id="dtab-gpu" onclick="switchDeviceTab('gpu')" style="border-radius:8px 8px 0 0;">Video/GPU</button>
                     <button class="btn btn-sm btn-outline" id="dtab-users" onclick="switchDeviceTab('users')" style="border-radius:8px 8px 0 0;">Users</button>
                     <button class="btn btn-sm btn-outline" id="dtab-logins" onclick="switchDeviceTab('logins')" style="border-radius:8px 8px 0 0;">Logins</button>
@@ -1624,6 +1625,41 @@
                             </thead>
                             <tbody id="printerDetailsBody">
                                 <tr><td colspan="6" style="text-align:center; color:var(--muted);">No printer data available</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: All Connected Devices (any port) -->
+            <div id="dpanel-connected" class="device-tab-panel" style="display:none;">
+                <div class="card" style="margin-bottom:24px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; gap:12px; flex-wrap:wrap;">
+                        <div class="card-title" style="margin-bottom:0;">All Connected Devices</div>
+                        <span class="badge badge-blue" id="connectedTotalBadge">0 devices</span>
+                    </div>
+                    <div class="card-subtitle" style="margin-bottom:14px;">
+                        Every device attached to any port or slot — USB, PCI/PCIe, Bluetooth, serial (COM),
+                        and display outputs. A projector or external monitor appears here with the video
+                        port it is plugged into.
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;" id="connectedFilterBar"></div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Device Name</th>
+                                    <th>Category</th>
+                                    <th>Connected Via</th>
+                                    <th>Port</th>
+                                    <th>Manufacturer</th>
+                                    <th>Serial</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="connectedDevicesBody">
+                                <tr><td colspan="8" style="text-align:center; color:var(--muted);">No connected device data available</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2841,6 +2877,11 @@ async function loadSoftwareForDevice() {
             ? `${printers.length} connected`
             : 'Not Installed';
 
+        // --- Connected Devices tab (anything attached to any port) ---
+        connectedDevices = hw.connected_devices || [];
+        connectedFilter  = 'all';
+        renderConnectedDevices();
+
         // --- GPU tab ---
         const gpus = hw.gpu_details || [];
         const gpuBody = document.getElementById('gpuDetailsBody');
@@ -2990,6 +3031,78 @@ async function loadChangeReport(deviceName) {
     }
 }
 
+// ── Connected Devices (any port) ─────────────────────────────────────────────
+let connectedDevices = [];
+let connectedFilter  = 'all';
+
+// Colour the "Connected Via" badge by bus so display outputs stand out.
+function connectionTone(conn) {
+    const c = String(conn || '').toLowerCase();
+    if (c.includes('hdmi') || c.includes('displayport') || c.includes('vga') ||
+        c.includes('dvi')  || c.includes('display')     || c.includes('panel') ||
+        c.includes('miracast')) return 'purple';
+    if (c.includes('usb'))       return 'blue';
+    if (c.includes('bluetooth')) return 'blue';
+    if (c.includes('pci'))       return 'green';
+    if (c.includes('serial'))    return 'orange';
+    return 'orange';
+}
+
+function setConnectedFilter(v) {
+    connectedFilter = v;
+    renderConnectedDevices();
+}
+
+function renderConnectedDevices() {
+    const body = document.getElementById('connectedDevicesBody');
+    const all  = (connectedDevices || []).filter(d => d && typeof d === 'object');
+
+    document.getElementById('connectedTotalBadge').textContent =
+        `${all.length} device${all.length === 1 ? '' : 's'}`;
+
+    // Filter chips, one per distinct connection type
+    const counts = {};
+    all.forEach(d => {
+        const k = (d && d.connection) || 'Other';
+        counts[k] = (counts[k] || 0) + 1;
+    });
+    const bar = document.getElementById('connectedFilterBar');
+    const chips = [['all', `All (${all.length})`]].concat(
+        Object.keys(counts).sort().map(k => [k, `${k} (${counts[k]})`]));
+    bar.innerHTML = chips.map(([val, label]) => {
+        const active = connectedFilter === val;
+        return `<button class="btn btn-sm ${active ? '' : 'btn-outline'}"
+                    onclick="setConnectedFilter(${JSON.stringify(val).replace(/"/g, '&quot;')})">${esc(label)}</button>`;
+    }).join('');
+
+    const rows = connectedFilter === 'all'
+        ? all
+        : all.filter(d => ((d && d.connection) || 'Other') === connectedFilter);
+
+    if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--muted);">${
+            all.length ? 'No devices match this filter' : 'No connected device data available'
+        }</td></tr>`;
+        return;
+    }
+
+    body.innerHTML = rows.map((d, i) => {
+        const dev = d || {};
+        const ok  = String(dev.status || '').toLowerCase() === 'ok';
+        return `<tr>
+            <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
+            <td><b>${esc(dev.name || '—')}</b></td>
+            <td>${esc(dev.device_class || '—')}</td>
+            <td><span class="badge badge-${connectionTone(dev.connection)}">${esc(dev.connection || '—')}</span></td>
+            <td class="td-mono" style="font-size:12px;">${esc(dev.port || '—')}</td>
+            <td style="font-size:12px;">${esc(dev.manufacturer || '—')}</td>
+            <td class="td-mono" style="font-size:12px;">${esc(dev.serial_number || '—')}</td>
+            <td>${ok ? '<span class="badge badge-green">OK</span>'
+                     : `<span class="badge badge-orange">${esc(dev.status || '—')}</span>`}</td>
+        </tr>`;
+    }).join('');
+}
+
 // Win32_Printer.ExtendedPrinterStatus is a numeric code — map it to a readable label.
 function printerStatusText(code) {
     const map = {
@@ -3020,7 +3133,7 @@ function printerStatusText(code) {
 }
 
 function switchDeviceTab(tab) {
-    const tabs = ['overview','hardware','storage','network','peripherals','printers','gpu','users','logins','software','lifecycle'];
+    const tabs = ['overview','hardware','storage','network','peripherals','printers','connected','gpu','users','logins','software','lifecycle'];
     tabs.forEach(t => {
         const panel = document.getElementById('dpanel-' + t);
         const btn   = document.getElementById('dtab-' + t);

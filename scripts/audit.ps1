@@ -440,6 +440,111 @@ try {
     }
 } catch {}
 
+# 16b. All Connected Devices — anything attached to any port
+# The peripherals list above is whitelisted to a few input classes, so anything
+# else plugged in (projector, dongle, camera, external audio, serial adapter)
+# never appeared anywhere in the audit. This captures every device sitting on a
+# physical port or slot, along with which port it is on.
+Write-Host "Collecting all connected devices..." -ForegroundColor Cyan
+$connectedDevices = @()
+try {
+    # Display/projector details keyed by PnP device id. EDID gives the real model
+    # name and serial; connection params say which video output it is plugged into.
+    $monitorInfo = @{}
+    try {
+        $connTech = @{}
+        try {
+            Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams -ErrorAction Stop |
+                ForEach-Object { $connTech[$_.InstanceName] = $_.VideoOutputTechnology }
+        } catch {}
+        $decodeEdid = {
+            param($arr)
+            if (-not $arr) { return "" }
+            (($arr | Where-Object { $_ -gt 0 } | ForEach-Object { [char]$_ }) -join "").Trim()
+        }
+        foreach ($e in (Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop)) {
+            # Must be int64 — an internal panel reports 0x80000000, which overflows
+            # int32 and would throw, aborting enrichment for every other display.
+            $tech = switch ([int64]$connTech[$e.InstanceName]) {
+                0          { "VGA" }
+                4          { "DVI" }
+                5          { "HDMI" }
+                6          { "Internal Panel (LVDS)" }
+                10         { "DisplayPort" }
+                11         { "DisplayPort (Embedded)" }
+                15         { "Wireless (Miracast)" }
+                2147483648 { "Internal Panel" }
+                default    { "Display Output" }
+            }
+            # InstanceName carries a trailing _0 that DeviceID does not
+            $monitorInfo[($e.InstanceName -replace '_\d+$', '')] = @{
+                model  = (& $decodeEdid $e.UserFriendlyName)
+                serial = (& $decodeEdid $e.SerialNumberID)
+                tech   = $tech
+            }
+        }
+    } catch {}
+
+    # Classes that are never externally attached hardware — pure noise otherwise.
+    $excludedClasses = @("SoftwareDevice", "SoftwareComponent", "System", "Computer", "Volume",
+                         "VolumeSnapshotter", "LegacyDriver", "CompositeBus", "SecurityDevices",
+                         "SmartCardFilter", "PrintQueue", "Processor", "FirmwareDevice",
+                         "Firmware", "MTD", "SDHost")
+
+    $allDevices = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
+        $_.Status -eq "OK" -and $_.PNPClass -and
+        ($_.PNPClass -notin $excludedClasses) -and
+        ($_.DeviceID -notmatch '^(SWD\\|ROOT\\|ACPI\\)') -and
+        # BTHENUM\{GUID}... entries are Bluetooth profiles (A2DP, GATT, SPP) exposed
+        # per paired device, not devices themselves — keep only BTHENUM\DEV_*
+        ($_.DeviceID -notmatch '^BTHENUM\\\{')
+    }
+
+    foreach ($dev in $allDevices) {
+        $devId = Get-SafeString $dev.DeviceID ""
+        $connection = switch -Regex ($devId) {
+            '^USBSTOR\\'        { "USB Storage"; break }
+            '^USB\\'            { "USB"; break }
+            '^PCI\\'            { "PCI / PCIe Slot"; break }
+            '^(BTHENUM|BTH)\\'  { "Bluetooth"; break }
+            '^DISPLAY\\'        { "Display Output"; break }
+            '^HID\\'            { "HID (USB/Bluetooth)"; break }
+            '^(SCSI|IDE|SATA)\\' { "Drive Bus"; break }
+            '^PCMCIA\\'         { "PCMCIA"; break }
+            default             { "Other" }
+        }
+
+        $devName = Get-SafeString $dev.Name "Unknown"
+        $serialNo = ""
+        # Windows exposes the concrete port for serial/parallel devices in the name
+        $port = ""
+        if ($devName -match '\((COM\d+|LPT\d+)\)') { $port = $matches[1] }
+
+        # Enrich displays (projectors, external monitors) from EDID
+        if ($monitorInfo.ContainsKey($devId)) {
+            $mi = $monitorInfo[$devId]
+            if ($mi.model)  { $devName  = $mi.model }
+            if ($mi.serial) { $serialNo = $mi.serial }
+            if ($mi.tech)   { $connection = $mi.tech; $port = $mi.tech }
+        }
+
+        $connectedDevices += @{
+            name           = $devName
+            device_class   = Get-SafeString $dev.PNPClass "Unknown"
+            description    = Get-SafeString $dev.Description "Unknown"
+            manufacturer   = Get-SafeString $dev.Manufacturer "Unknown"
+            connection     = $connection
+            port           = if ($port) { $port } else { "-" }
+            serial_number  = if ($serialNo) { $serialNo } else { "-" }
+            device_id      = $devId
+            status         = Get-SafeString $dev.Status "Unknown"
+            driver_version = Get-SafeString $dev.DriverVersion "Unknown"
+        }
+    }
+    # Guard against pathological payload sizes on heavily-populated machines
+    if ($connectedDevices.Count -gt 200) { $connectedDevices = $connectedDevices[0..199] }
+} catch {}
+
 # 17. Disk Partitions (Detailed — all Excel fields)
 Write-Host "Collecting disk partition details..." -ForegroundColor Cyan
 $diskPartitions = @()
@@ -727,6 +832,7 @@ $data = @{
         gpu_details      = $gpuDetails
         network_adapters = $networkAdapters
         peripherals      = $peripherals
+        connected_devices = $connectedDevices
         disk_partitions  = $diskPartitions
         disk_details     = $diskDetails
     }

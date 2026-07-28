@@ -440,6 +440,21 @@ class Peripheral(_CleanBase):
     version: str = "Unknown"           # Excel: version (was 'status')
 
 
+class ConnectedDevice(_CleanBase):
+    # Every device attached to any port/slot — USB, PCI/PCIe, Bluetooth, serial,
+    # and display outputs (this is where an attached projector is reported).
+    name: str = "Unknown"
+    device_class: str = "Unknown"      # PnP class / bus category
+    description: str = "Unknown"
+    manufacturer: str = "Unknown"
+    connection: str = "Unknown"        # USB / PCI / Bluetooth / HDMI / VGA / Serial
+    port: str = "-"                    # concrete port: COM3, HDMI, Bus 001 Device 004
+    serial_number: str = "-"
+    device_id: str = ""
+    status: str = "Unknown"
+    driver_version: str = "Unknown"
+
+
 class DiskPartition(_CleanBase):
     # Excel: Partitions (all 5 fields)
     name: str = "Unknown"
@@ -501,6 +516,7 @@ class HardwareDetails(BaseModel):
     gpu_details: List[Union[GpuInfo, dict]] = []
     network_adapters: List[Union[NetworkAdapter, dict]] = []
     peripherals: List[Union[Peripheral, dict]] = []
+    connected_devices: List[Union[ConnectedDevice, dict]] = []  # anything on any port
     disk_partitions: List[Union[DiskPartition, dict]] = []
     disk_details: List[Union[DiskInfo, dict]] = []  # Excel: Disk Information
 
@@ -517,7 +533,8 @@ class HardwareDetails(BaseModel):
     def normalize_str(cls, v):
         return clean_string(v, "Unknown")
 
-    @field_validator("gpu_details", "network_adapters", "peripherals", "disk_partitions", "disk_details", mode="before")
+    @field_validator("gpu_details", "network_adapters", "peripherals", "connected_devices",
+                     "disk_partitions", "disk_details", mode="before")
     @classmethod
     def coerce_list(cls, v):
         if v is None:
@@ -1123,6 +1140,34 @@ async def upload_audit(request: Request, client_id: str = Query(None)):
             Spacer(1, 12)
         ]))
 
+        # ── All Connected Devices (any port) ──────────────────────────────────
+        conn_list = get_hw_list(data, "connected_devices")
+        conn_rows = [[
+            pdf_text("Device Name", styles["bold"]), pdf_text("Category", styles["bold"]),
+            pdf_text("Connected Via", styles["bold"]), pdf_text("Port", styles["bold"]),
+            pdf_text("Manufacturer", styles["bold"]),
+        ]]
+        if conn_list:
+            for c in conn_list:
+                d = c if isinstance(c, dict) else model_to_dict(c)
+                conn_rows.append([
+                    pdf_text(d.get("name", ""),         styles["normal"]),
+                    pdf_text(d.get("device_class", ""), styles["normal"]),
+                    pdf_text(d.get("connection", ""),   styles["normal"]),
+                    pdf_text(d.get("port", ""),         styles["normal"]),
+                    pdf_text(d.get("manufacturer", ""), styles["normal"]),
+                ])
+        else:
+            conn_rows.append([pdf_text("No connected devices detected", styles["normal"])] +
+                             [pdf_text("-", styles["normal"])] * 4)
+        elements.append(KeepTogether([
+            Paragraph("All Connected Devices (Any Port)", styles["section"]),
+            pdf_text(f"Total Devices Connected: {len(conn_list)}", styles["bold"]),
+            Spacer(1, 4),
+            apply_grid_style(Table(conn_rows, colWidths=[168, 84, 96, 72, 84], repeatRows=1), header=True),
+            Spacer(1, 12)
+        ]))
+
         # ── Network Details ───────────────────────────────────────────────────
         net_rows = [[pdf_text("IP Address", styles["bold"]), pdf_text("Gateway", styles["bold"]), pdf_text("MAC", styles["bold"])]]
         if data.network_details:
@@ -1275,6 +1320,20 @@ async def upload_audit(request: Request, client_id: str = Query(None)):
             ET.SubElement(pe, "Name").text   = d.get("name", "")
             ET.SubElement(pe, "Type").text   = d.get("type", "")
             ET.SubElement(pe, "Status").text = d.get("status", "")
+
+        conn_xml = ET.SubElement(hw_xml, "ConnectedDevices")
+        conn_devices = get_hw_list(data, "connected_devices")
+        ET.SubElement(conn_xml, "TotalConnected").text = str(len(conn_devices))
+        for c in conn_devices:
+            d = c if isinstance(c, dict) else model_to_dict(c)
+            ce = ET.SubElement(conn_xml, "Device")
+            ET.SubElement(ce, "Name").text         = d.get("name", "")
+            ET.SubElement(ce, "Category").text     = d.get("device_class", "")
+            ET.SubElement(ce, "ConnectedVia").text = d.get("connection", "")
+            ET.SubElement(ce, "Port").text         = d.get("port", "")
+            ET.SubElement(ce, "Manufacturer").text = d.get("manufacturer", "")
+            ET.SubElement(ce, "SerialNumber").text = d.get("serial_number", "")
+            ET.SubElement(ce, "Status").text       = d.get("status", "")
 
         sw_xml = ET.SubElement(root, "SoftwareInventory")
         ET.SubElement(sw_xml, "TotalInstalled").text = str(len(data.software_inventory))
@@ -2620,3 +2679,4 @@ if os.path.exists(SCRIPTS_DIR):
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 if os.path.exists(FRONTEND_DIR):
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+    
