@@ -713,17 +713,65 @@ try:
             size_bytes = info.get('Disk Size', '').split('(')
             size_str = size_bytes[0].strip() if size_bytes else "Unknown"
             is_ssd = "Yes" if info.get('Solid State', '').lower() == 'yes' else "No"
-            # Get free space from df
+
+            # A raw disk has no file system of its own — diskutil reports
+            # "File System: Not applicable (no file system)". The old fallback
+            # looked up 'Content', but diskutil names that key 'Content (IOContent)',
+            # so it never matched and every disk came back "Unknown". Report the
+            # partition scheme, plus the file systems actually present on the disk.
+            fs = info.get('File System Personality', '')
+            if not fs:
+                scheme = (info.get('Content (IOContent)') or info.get('Content') or '').strip()
+                child_fs = []
+                try:
+                    ident = dev.rsplit('/', 1)[-1]
+                    lr = subprocess.run(['diskutil', 'list', ident],
+                                        capture_output=True, text=True, timeout=5)
+                    for pl in lr.stdout.splitlines():
+                        pp = pl.split()
+                        if pp and pp[0].rstrip(':').isdigit() and len(pp) > 1:
+                            part = pp[-1]
+                            pi = subprocess.run(['diskutil', 'info', part],
+                                                capture_output=True, text=True, timeout=5)
+                            for il in pi.stdout.splitlines():
+                                if 'File System Personality' in il:
+                                    v = il.split(':', 1)[1].strip()
+                                    if v and v not in child_fs:
+                                        child_fs.append(v)
+                                    break
+                except Exception:
+                    pass
+                if child_fs:
+                    fs = ', '.join(child_fs)
+                elif scheme:
+                    fs = scheme
+                else:
+                    fs = "Unknown"
+
+            # A raw device node is not mounted, so `df -h /dev/diskN` reports nothing.
+            # Sum the free space of whatever volumes of this disk are mounted.
             free_str = "Unknown"
             try:
-                dfr = subprocess.run(['df', '-h', dev], capture_output=True, text=True, timeout=5)
+                ident = dev.rsplit('/', 1)[-1]
+                dfr = subprocess.run(['df', '-k'], capture_output=True, text=True, timeout=5)
+                free_kb = 0
+                found = False
                 for dfl in dfr.stdout.splitlines()[1:]:
                     dfp = dfl.split()
-                    if len(dfp) >= 4: free_str = dfp[3]; break
-            except: pass
+                    if len(dfp) >= 4 and dfp[0].startswith('/dev/' + ident):
+                        try:
+                            free_kb += int(dfp[3])
+                            found = True
+                        except ValueError:
+                            pass
+                if found:
+                    free_str = "%.2f GB" % (free_kb / 1048576.0)
+            except Exception:
+                pass
+
             disks.append({
                 "name": dev, "interface": info.get('Protocol', 'Unknown'),
-                "file_system": info.get('File System Personality', info.get('Content', 'Unknown')),
+                "file_system": fs,
                 "manufacturer": "Apple", "model": info.get('Device / Media Name', 'Unknown'),
                 "serial_number": info.get('Device Serial Number', 'Unknown'),
                 "firmware": info.get('Firmware Revision', 'Unknown'),

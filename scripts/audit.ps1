@@ -615,37 +615,31 @@ try {
         $isSSD = if ($d.MediaType -match "SSD|Solid" -or $d.Model -match "SSD|NVMe|M\.2|SAMSUNG SSD|WD.*SSD|Crucial|Kingston SSD") { "Yes" } else { "No" }
         $interface = Get-SafeString $d.InterfaceType "Unknown"
 
-        # Get filesystem from first associated logical disk
+        # Walk DiskDrive -> DiskPartition -> LogicalDisk for the file system and
+        # free space. This previously hand-built "ASSOCIATORS OF" WQL strings and
+        # tried to escape the device id with -replace '\\\\','\\' — which swaps two
+        # backslashes for two backslashes, i.e. does nothing. The query matched no
+        # partitions on any machine, so file_system and free_space were always
+        # "Unknown". Get-CimAssociatedInstance needs no string escaping at all.
         $fileSystem = "Unknown"
+        $freeGB     = "Unknown"
         try {
-            $partQuery = "ASSOCIATORS OF {Win32_DiskDrive.DeviceID='$($d.DeviceID -replace '\\\\','\\')' } WHERE AssocClass=Win32_DiskDriveToDiskPartition"
-            $diskParts = Get-CimInstance -Query $partQuery -ErrorAction SilentlyContinue
-            foreach ($dp in $diskParts) {
-                $logQuery = "ASSOCIATORS OF {Win32_DiskPartition.DeviceID='$($dp.DeviceID)'} WHERE AssocClass=Win32_LogicalDiskToPartition"
-                $logDisks = Get-CimInstance -Query $logQuery -ErrorAction SilentlyContinue
-                if ($logDisks) {
-                    $fileSystem = Get-SafeString ($logDisks | Select-Object -First 1).FileSystem "Unknown"
-                    break
-                }
-            }
-        } catch {}
+            $logicalDisks = $d |
+                Get-CimAssociatedInstance -ResultClassName Win32_DiskPartition -ErrorAction SilentlyContinue |
+                Get-CimAssociatedInstance -ResultClassName Win32_LogicalDisk    -ErrorAction SilentlyContinue
 
-        # Sum free space from all logical disks on this physical drive
-        $totalFree = 0
-        $hasFree = $false
-        try {
-            foreach ($dp in $diskParts) {
-                $logQuery2 = "ASSOCIATORS OF {Win32_DiskPartition.DeviceID='$($dp.DeviceID)'} WHERE AssocClass=Win32_LogicalDiskToPartition"
-                $logDisks2 = Get-CimInstance -Query $logQuery2 -ErrorAction SilentlyContinue
-                foreach ($ld2 in $logDisks2) {
-                    if ($ld2.FreeSpace -and $ld2.FreeSpace -gt 0) {
-                        $totalFree += $ld2.FreeSpace
-                        $hasFree = $true
-                    }
+            if ($logicalDisks) {
+                # A physical disk can carry more than one volume (e.g. NTFS + FAT32)
+                $fsList = @($logicalDisks | Where-Object { $_.FileSystem } |
+                            Select-Object -ExpandProperty FileSystem -Unique)
+                if ($fsList.Count -gt 0) { $fileSystem = ($fsList -join ', ') }
+
+                $totalFree = ($logicalDisks | Measure-Object -Property FreeSpace -Sum).Sum
+                if ($totalFree -and $totalFree -gt 0) {
+                    $freeGB = [math]::Round($totalFree / 1GB, 2).ToString() + " GB"
                 }
             }
         } catch {}
-        $freeGB = if ($hasFree) { [math]::Round($totalFree / 1GB, 2).ToString() + " GB" } else { "Unknown" }
 
         $diskDetails += @{
             name          = Get-SafeString $d.Name "Unknown"
