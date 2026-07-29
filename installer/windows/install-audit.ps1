@@ -168,33 +168,65 @@ Write-Ok "Runner installed"
 
 # ---------------------------------------------------------------- 7. task
 Write-Step "Registering the scheduled task..."
-schtasks /Query /TN "$TaskName" >$null 2>&1
-if ($LASTEXITCODE -eq 0) {
-    schtasks /Delete /TN "$TaskName" /F >$null 2>&1
-    Write-Step "Removed previous task"
+
+# schtasks reports "task not found" on STDERR and exits non-zero. That is the
+# normal case on a first install, but with $ErrorActionPreference = 'Stop' any
+# stderr from a native command becomes a terminating NativeCommandError and the
+# installer aborts. Relax the preference around these calls and judge success by
+# $LASTEXITCODE instead. (Redirecting stderr alone does NOT prevent this.)
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    schtasks /Query /TN "$TaskName" >$null 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        schtasks /Delete /TN "$TaskName" /F >$null 2>&1
+        Write-Step "Removed previous task"
+    }
+    schtasks /Query /TN "$TaskName (Startup)" >$null 2>&1
+    if ($LASTEXITCODE -eq 0) { schtasks /Delete /TN "$TaskName (Startup)" /F >$null 2>&1 }
+
+    $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runnerPath`""
+
+    # Repeating schedule
+    schtasks /Create /TN "$TaskName" /SC HOURLY /MO $intervalHours /RU SYSTEM /RL HIGHEST /F /TR $action >$null 2>&1
+    $createRc = $LASTEXITCODE
+
+    # Extra trigger so a PC that was switched off still reports after boot
+    schtasks /Create /TN "$TaskName (Startup)" /SC ONSTART /DELAY 0005:00 /RU SYSTEM /RL HIGHEST /F /TR $action >$null 2>&1
+    $startupRc = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $prevEAP
 }
 
-$action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runnerPath`""
-
-# Repeating schedule
-schtasks /Create /TN "$TaskName" /SC HOURLY /MO $intervalHours /RU SYSTEM /RL HIGHEST /F /TR $action >$null 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Fail "Could not create the scheduled task"; Read-Host "  Press Enter"; exit 1 }
-
-# Extra trigger so a PC that was switched off still reports after boot
-schtasks /Create /TN "$TaskName (Startup)" /SC ONSTART /DELAY 0005:00 /RU SYSTEM /RL HIGHEST /F /TR $action >$null 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Warn "Startup trigger not created (repeating schedule still active)" }
+if ($createRc -ne 0) {
+    Write-Fail "Could not create the scheduled task (schtasks exit code $createRc)"
+    Write-Host "  Run this window as Administrator and try again."
+    Read-Host "  Press Enter to exit"; exit 1
+}
+if ($startupRc -ne 0) { Write-Warn "Startup trigger not created (repeating schedule still active)" }
 
 Write-Ok "Scheduled: every $intervalHours hours, and 5 minutes after every startup"
 
 # ---------------------------------------------------------------- 8. first run
 Write-Step "Running the first audit now (may take up to a minute)..."
 $env:NSDL_NO_JITTER = '1'
+# Same native-command trap as above: anything the audit writes to stderr would
+# otherwise abort the installer even though the schedule is already in place.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runnerPath
-    Write-Ok "First audit completed"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "First audit completed"
+    } else {
+        Write-Warn "First audit did not complete (exit code $LASTEXITCODE) - the schedule is still active"
+        Write-Warn "Check $InstallDir\audit.log"
+    }
 } catch {
     Write-Warn "First audit did not complete - the schedule is still active"
     Write-Warn "Check $InstallDir\audit.log"
+} finally {
+    $ErrorActionPreference = $prevEAP
 }
 
 # ---------------------------------------------------------------- done

@@ -645,6 +645,142 @@
         /* ═══════════════════════════════════════════════════════════════════
            RESPONSIVE
         ═══════════════════════════════════════════════════════════════════ */
+        /* ═══════════════════════════════════════════════════════════════════
+           INFRAPULSE — Compliance Audit hero
+        ═══════════════════════════════════════════════════════════════════ */
+        .ip-stage {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 34px 20px 48px;
+        }
+        .ip-simple,
+        .ip-hero2 {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            width: 100%;
+        }
+        .ip-simple { max-width: 420px; }
+        .ip-hero2  { max-width: 720px; }
+
+        /* Logo mark with a slow radar pulse — the "pulse" in Infrapulse */
+        .ip-mark {
+            position: relative;
+            width: 84px; height: 84px;
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 24px;
+            color: #fff;
+            background: linear-gradient(150deg, var(--primary-lt) 0%, var(--primary) 60%, var(--primary-dk) 100%);
+            box-shadow: 0 10px 26px rgba(30,58,138,0.30);
+            margin-bottom: 24px;
+        }
+        .ip-mark svg { width: 44px; height: 44px; position: relative; z-index: 1; }
+        .ip-pulse {
+            position: absolute; inset: 0;
+            border-radius: 24px;
+            border: 2px solid var(--primary-lt);
+            opacity: 0;
+            animation: ip-ripple 3s ease-out infinite;
+        }
+        .ip-pulse-2 { animation-delay: 1.5s; }
+        @keyframes ip-ripple {
+            0%   { transform: scale(1);    opacity: 0.55; }
+            70%  { transform: scale(1.45); opacity: 0; }
+            100% { transform: scale(1.45); opacity: 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .ip-pulse { animation: none; }
+        }
+
+        .ip-name {
+            font-size: 38px; font-weight: 800; letter-spacing: -0.8px;
+            color: var(--text); margin: 0 0 8px;
+        }
+        .ip-tag {
+            font-size: 13px; font-weight: 600; letter-spacing: 0.4px;
+            text-transform: uppercase; color: var(--primary-lt); margin: 0 0 18px;
+        }
+        .ip-lede {
+            font-size: 14.5px; line-height: 1.72; color: var(--muted);
+            margin: 0 0 30px; max-width: 560px;
+        }
+
+        .ip-actions {
+            display: flex; gap: 10px; align-items: stretch;
+            flex-wrap: wrap; justify-content: center; margin-bottom: 42px;
+        }
+        .ip-os {
+            width: 150px; text-align: center; text-align-last: center;
+        }
+        .ip-start {
+            padding: 13px 30px; font-size: 14.5px; font-weight: 700;
+            border-radius: 10px; white-space: nowrap;
+        }
+
+        /* Capability strip — what the scan actually covers */
+        .ip-caps {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 14px; width: 100%;
+        }
+        .ip-cap {
+            display: flex; flex-direction: column; gap: 5px;
+            padding: 18px 14px;
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); text-align: left;
+            transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+        }
+        .ip-cap:hover {
+            border-color: var(--primary-lt);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        .ip-cap-ico { font-size: 19px; line-height: 1; margin-bottom: 3px; }
+        .ip-cap-t   { font-size: 13px; font-weight: 700; color: var(--text); }
+        .ip-cap-s   { font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+
+        /* Manual fallback, collapsed so the page stays quiet */
+        .ip-manual { margin-top: 30px; width: 100%; max-width: 560px; }
+        .ip-manual > summary {
+            cursor: pointer; list-style: none;
+            font-size: 12px; color: var(--muted);
+            padding: 6px 0; user-select: none;
+        }
+        .ip-manual > summary::-webkit-details-marker { display: none; }
+        .ip-manual > summary:hover { color: var(--primary); }
+        .ip-manual > summary::after { content: ' ▾'; font-size: 10px; }
+        .ip-manual[open] > summary::after { content: ' ▴'; }
+        .ip-manual-body {
+            display: flex; flex-direction: column; gap: 10px;
+            align-items: stretch; margin-top: 10px;
+        }
+        .ip-cmd-body {
+            background: var(--surface-2); border: 1px solid var(--border);
+            border-radius: 8px; padding: 11px 13px; text-align: left;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 11px; line-height: 1.65; color: var(--text-2);
+            word-break: break-all; user-select: all;
+        }
+
+        /* Processing / success states */
+        .ip-state-title { font-size: 19px; font-weight: 800; margin: 0 0 8px; color: var(--text); }
+        .ip-state-sub   { font-size: 13px; color: var(--muted); line-height: 1.7; margin: 0 0 20px; }
+        .ip-results     { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 340px; }
+
+        @media (max-width: 860px) {
+            .ip-caps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 640px) {
+            .ip-stage { padding: 24px 16px 34px; }
+            .ip-name  { font-size: 29px; }
+            .ip-lede  { font-size: 13.5px; }
+            .ip-actions { flex-direction: column; width: 100%; max-width: 300px; }
+            .ip-os, .ip-start { width: 100%; }
+            .ip-caps { grid-template-columns: 1fr; }
+        }
+
         @media (max-width: 960px) {
             .main-content { padding: 20px 16px; }
             .form-grid    { grid-template-columns: 1fr; }
@@ -673,7 +809,7 @@
         <div class="brand">
             <div class="brand-icon">🛡️</div>
             <div>
-                <div class="brand-name">Info Gathering</div>
+                <div class="brand-name">Infrapulse</div>
                 <div class="brand-sub">IT Compliance &amp; Discovery Portal</div>
             </div>
         </div>
@@ -683,13 +819,9 @@
                 <span class="tab-icon">🛡️</span>
                 <span class="tab-label">Compliance Audit</span>
             </button>
-            <button class="tab-btn" role="tab" data-tab="assets" id="btn-assets" onclick="switchTab('assets')">
-                <span class="tab-icon">🗂️</span>
-                <span class="tab-label">Asset Registry</span>
-            </button>
             <button class="tab-btn" role="tab" data-tab="discovery" id="btn-discovery" onclick="switchTab('discovery')">
                 <span class="tab-icon">🔍</span>
-                <span class="tab-label">Info Gathering</span>
+                <span class="tab-label">Infrapulse</span>
             </button>
             <button class="tab-btn" role="tab" data-tab="software" id="btn-software" onclick="switchTab('software')">
                 <span class="tab-icon">🖥️</span>
@@ -738,497 +870,117 @@
     <!-- ─────────────────────────────────────────────────────────────
          TAB 1: COMPLIANCE AUDIT
     ───────────────────────────────────────────────────────────────── -->
-    <div class="tab-panel active" id="panel-audit" role="tabpanel">
-        <!-- Top 4 Stats -->
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 32px;">
-            <div class="card" style="display:flex; align-items:center; gap:16px; padding:20px;">
-                <div class="card-icon blue" style="width:48px;height:48px;border-radius:50%;font-size:24px;">💻</div>
-                <div>
-                    <div style="font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Devices</div>
-                    <div style="font-size:24px; font-weight:800; color:var(--text); line-height:1;" id="statDevices">0</div>
-                    <div style="font-size:12px; color:var(--muted); margin-top:4px;">Total Discovered</div>
+                <div class="tab-panel active" id="panel-audit" role="tabpanel">
+
+        <div class="ip-stage">
+
+            <!-- Setup View -->
+            <div id="setupView" class="ip-hero2">
+
+                <div class="ip-mark" aria-hidden="true">
+                    <span class="ip-pulse"></span>
+                    <span class="ip-pulse ip-pulse-2"></span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+                         stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2 4 5.5v6c0 4.6 3.2 8.9 8 10.5 4.8-1.6 8-5.9 8-10.5v-6L12 2Z"/>
+                        <path d="m9 12 2 2 4-4"/>
+                    </svg>
                 </div>
-            </div>
-            <div class="card" style="display:flex; align-items:center; gap:16px; padding:20px;">
-                <div class="card-icon green" style="width:48px;height:48px;border-radius:50%;font-size:24px;">📄</div>
-                <div>
-                    <div style="font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Reports</div>
-                    <div style="font-size:24px; font-weight:800; color:var(--text); line-height:1;" id="statReports">0</div>
-                    <div style="font-size:12px; color:var(--muted); margin-top:4px;">Generated</div>
+
+                <h1 class="ip-name">Infrapulse</h1>
+                <p class="ip-tag">Workstation Compliance for NSDL Branch Offices</p>
+
+                <p class="ip-lede">
+                    Run one scan on a branch machine and get a complete, audit-ready
+                    picture of it &mdash; hardware, installed software, printers, storage
+                    and network &mdash; delivered as a signed PDF and XML report.
+                </p>
+
+                <div class="ip-actions">
+                    <select id="osSelection" class="input-field ip-os" onchange="updateDownloadUrl()" aria-label="Target operating system">
+                        <option value="windows" selected>Windows</option>
+                        <option value="mac">macOS</option>
+                        <option value="linux">Linux</option>
+                    </select>
+
+                    <button class="btn btn-primary ip-start" id="downloadBtn"
+                        onmouseenter="updateDownloadUrl()"
+                        onmousedown="updateDownloadUrl()"
+                        onclick="triggerScanDownload()">
+                        Get Started
+                    </button>
                 </div>
-            </div>
-            <div class="card" style="display:flex; align-items:center; gap:16px; padding:20px;">
-                <div class="card-icon orange" style="width:48px;height:48px;border-radius:50%;font-size:24px;">⚠️</div>
-                <div>
-                    <div style="font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Issues</div>
-                    <div style="font-size:24px; font-weight:800; color:var(--text); line-height:1;">0</div>
-                    <div style="font-size:12px; color:var(--muted); margin-top:4px;">Detected</div>
-                </div>
-            </div>
-            <div class="card" style="display:flex; align-items:center; gap:16px; padding:20px;">
-                <div class="card-icon purple" style="width:48px;height:48px;border-radius:50%;font-size:24px;">📅</div>
-                <div>
-                    <div style="font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Last Scan</div>
-                    <div style="font-size:24px; font-weight:800; color:var(--text); line-height:1;" id="statLastScan">Never</div>
-                    <div style="font-size:12px; color:var(--muted); margin-top:4px;">Not Started Yet</div>
-                </div>
-            </div>
-        </div>
 
-        <div style="display:grid; grid-template-columns: 1fr 1.2fr 1fr; gap:24px; align-items:start;">
-
-            <!-- Left Column: Config & Estimate -->
-            <div style="display:flex; flex-direction:column; gap:24px;">
-                <div class="card" id="auditMainPanel" style="min-height:380px;">
-
-                    <!-- Setup View -->
-                    <div id="setupView">
-                        <div class="card-header" style="margin-bottom:16px;">
-                            <div class="card-icon blue">🏛️</div>
-                            <div>
-                                <div class="card-title">Branch Configuration</div>
-                                <div class="card-subtitle">Provide branch details to initiate the compliance scan</div>
-                            </div>
-                        </div>
-
-                        <div style="display:flex; flex-direction:column; gap:16px; margin-bottom:20px;">
-                            <div class="form-group">
-                                <label for="branchName">Branch Name</label>
-                                <input type="text" id="branchName" class="input-field" placeholder="e.g. RELIGARE BROKING LIMITED" value="RELIGARE BROKING LIMITED">
-                            </div>
-                            <div class="form-group">
-                                <label for="branchCode">Branch Code</label>
-                                <input type="text" id="branchCode" class="input-field" placeholder="e.g. 8301231" value="8301231">
-                            </div>
-                            <div class="form-group">
-                                <label for="officerName">Officer Name</label>
-                                <input type="text" id="officerName" class="input-field" placeholder="e.g. SANDIP BALIRAM LOKHANDE" value="SANDIP BALIRAM LOKHANDE">
-                            </div>
-                            <div class="form-group">
-                                <label for="osSelection">Target Operating System</label>
-                                <select id="osSelection" class="input-field" onchange="updateDownloadUrl()">
-                                    <option value="windows" selected>🪟 Windows</option>
-                                    <option value="mac">🍎 macOS</option>
-                                    <option value="linux">🐧 Linux</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:12px; padding:16px; display:flex; gap:12px; margin-bottom:20px;">
-                            <div style="font-size:20px;">🛡️</div>
-                            <div>
-                                <div style="font-size:13px; font-weight:700; color:#1e3a8a; margin-bottom:2px;">Your data is secure</div>
-                                <div style="font-size:11px; color:#3b82f6;">All scans are performed securely. No data is stored without consent.</div>
-                            </div>
-                        </div>
-
-                        <div>
-                            <button class="btn btn-primary btn-lg btn-full" id="downloadBtn"
-                                onmouseenter="updateDownloadUrl()"
-                                onmousedown="updateDownloadUrl()"
-                                onclick="triggerScanDownload()"
-                                style="flex-direction:column; padding:12px; height:auto; gap:4px;">
-                                <div style="font-size:15px; font-weight:600;">🚀 Start Compliance Audit</div>
-                                <div style="font-size:11px; font-weight:400; opacity:0.8;">Download secure launcher and begin scan</div>
-                            </button>
-                        </div>
-
-                        <!-- Copyable audit command -->
-                        <div id="auditCmdBox" style="margin-top:16px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:10px; padding:14px;">
-                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-                                <div style="font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase;">Or copy &amp; paste this command on the target machine</div>
-                                <button class="btn btn-outline btn-sm" id="auditCmdCopyBtn" onclick="copyAuditCmd()" style="font-size:11px; padding:4px 10px;">📋 Copy</button>
-                            </div>
-                            <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--text); word-break:break-all; line-height:1.6; user-select:all;" id="auditCmdText"></div>
-                        </div>
+                <!-- What the scan actually covers -->
+                <div class="ip-caps">
+                    <div class="ip-cap">
+                        <span class="ip-cap-ico">&#128187;</span>
+                        <span class="ip-cap-t">Hardware</span>
+                        <span class="ip-cap-s">CPU, RAM, disks, GPU, serial &amp; BIOS</span>
                     </div>
-
-                    <!-- Processing View -->
-                    <div id="processingView" style="display:none; text-align:center; padding:32px 10px;">
-                        <div class="spinner" style="margin:0 auto 24px;"></div>
-                        <h2 style="font-size:20px; font-weight:800; margin-bottom:10px; color:var(--primary);">Audit In Progress…</h2>
-                        <p style="color:var(--muted); font-size:13px; max-width:380px; margin:0 auto 16px; line-height:1.7;">
-                            Secure diagnostic scan is executing on your workstation.
-                            <br><br>
-                            <span id="instructionText"></span>
-                        </p>
-                        <div id="cmdBlockContainer" style="display:none; max-width:100%; margin:0 auto;">
-                            <div class="code-block" style="font-size:11px;">
-                                <button class="copy-btn" id="copyBtn" onclick="copyCommand()">📋 Copy</button>
-                                <pre id="cmdText"></pre>
-                            </div>
-                        </div>
+                    <div class="ip-cap">
+                        <span class="ip-cap-ico">&#128230;</span>
+                        <span class="ip-cap-t">Software</span>
+                        <span class="ip-cap-s">Full inventory, updates &amp; antivirus</span>
                     </div>
-
-                    <!-- Success View -->
-                    <div id="successState" style="display:none; text-align:center; padding:32px 10px;">
-                        <div class="success-ring">✓</div>
-                        <h2 style="font-size:20px; font-weight:800; margin-bottom:10px;">Audit Successful!</h2>
-                        <p style="color:var(--muted); font-size:13px; margin-bottom:24px; line-height:1.6;">
-                            Enterprise system audit &amp; compliance report compiled securely.
-                        </p>
-                        <div style="display:flex; flex-direction:column; gap:12px;">
-                            <div style="display:flex; gap:10px;">
-                                <a href="#" id="downloadPdfBtn" class="btn btn-primary" target="_blank" style="flex:1;">📥 PDF Report</a>
-                                <a href="#" id="viewPdfBtn" class="btn btn-outline" target="_blank" style="padding:10px 14px;">👁️</a>
-                            </div>
-                            <div style="display:flex; gap:10px;">
-                                <a href="#" id="downloadXmlBtn" class="btn btn-outline" target="_blank" style="flex:1;">📄 Export XML</a>
-                                <a href="#" id="viewXmlBtn" class="btn btn-outline" target="_blank" style="padding:10px 14px;">👁️</a>
-                            </div>
-                        </div>
+                    <div class="ip-cap">
+                        <span class="ip-cap-ico">&#128225;</span>
+                        <span class="ip-cap-t">Network</span>
+                        <span class="ip-cap-s">Adapters, printers &amp; connected devices</span>
+                    </div>
+                    <div class="ip-cap">
+                        <span class="ip-cap-ico">&#128196;</span>
+                        <span class="ip-cap-t">Report</span>
+                        <span class="ip-cap-s">PDF &amp; XML, generated instantly</span>
                     </div>
                 </div>
 
-                <!-- Estimated Time -->
-                <div class="card" style="padding:20px;">
-                    <div class="section-title" style="color:var(--primary); font-weight:700; display:flex; align-items:center; gap:8px;">
-                        <span>⏱️</span> Estimated Time
+                <!-- Branch details still travel with the audit; simply not asked for
+                     on screen. Kept as inputs so the download/report code is unchanged. -->
+                <input type="hidden" id="branchName"   value="RELIGARE BROKING LIMITED">
+                <input type="hidden" id="branchCode"   value="8301231">
+                <input type="hidden" id="officerName"  value="SANDIP BALIRAM LOKHANDE">
+
+                <details class="ip-manual">
+                    <summary>Run manually instead</summary>
+                    <div class="ip-manual-body">
+                        <div class="ip-cmd-body" id="auditCmdText"></div>
+                        <button class="btn btn-outline btn-sm" id="auditCmdCopyBtn" onclick="copyAuditCmd()">&#128203; Copy</button>
                     </div>
-                    <div style="display:flex; justify-content:space-between; text-align:center;">
-                        <div>
-                            <div style="font-size:11px; color:var(--muted); margin-bottom:4px;">Download</div>
-                            <div style="font-size:13px; font-weight:700; color:var(--primary);">~ 5 sec</div>
-                        </div>
-                        <div style="border-left:1px solid var(--border); padding-left:16px;">
-                            <div style="font-size:11px; color:var(--muted); margin-bottom:4px;">Scan Duration</div>
-                            <div style="font-size:13px; font-weight:700; color:var(--primary);">~ 30 - 60 sec</div>
-                        </div>
-                        <div style="border-left:1px solid var(--border); padding-left:16px;">
-                            <div style="font-size:11px; color:var(--muted); margin-bottom:4px;">Report Generation</div>
-                            <div style="font-size:13px; font-weight:700; color:var(--primary);">Instant</div>
-                        </div>
+                </details>
+            </div>
+
+            <!-- Processing View -->
+            <div id="processingView" class="ip-simple" style="display:none;">
+                <div class="spinner" style="margin:0 auto 22px;"></div>
+                <h2 class="ip-state-title">Audit in progress</h2>
+                <p class="ip-state-sub">
+                    The secure scan is running on the workstation.
+                    <br>
+                    <span id="instructionText"></span>
+                </p>
+                <div id="cmdBlockContainer" style="display:none; width:100%; max-width:520px;">
+                    <div class="code-block" style="font-size:11px;">
+                        <button class="copy-btn" id="copyBtn" onclick="copyCommand()">&#128203; Copy</button>
+                        <pre id="cmdText"></pre>
                     </div>
                 </div>
             </div>
 
-            <!-- Middle Column: Progress & Steps -->
-            <div style="display:flex; flex-direction:column; gap:24px;">
-                <div class="card" style="padding:24px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
-                        <div class="section-title" style="margin:0; color:var(--primary); font-weight:700; display:flex; align-items:center; gap:8px;">
-                            <span>📈</span> Audit Progress
-                        </div>
-                        <div style="font-size:12px; color:var(--muted);">Step 1 of 4</div>
+            <!-- Success View -->
+            <div id="successState" class="ip-simple" style="display:none;">
+                <div class="success-ring">&#10003;</div>
+                <h2 class="ip-state-title">Audit complete</h2>
+                <p class="ip-state-sub">The compliance report is ready.</p>
+                <div class="ip-results">
+                    <div style="display:flex; gap:10px;">
+                        <a href="#" id="downloadPdfBtn" class="btn btn-primary" target="_blank" style="flex:1;">&#128229; PDF Report</a>
+                        <a href="#" id="viewPdfBtn" class="btn btn-outline" target="_blank" style="padding:10px 14px;">&#128065;</a>
                     </div>
-                    
-                    <!-- Stepper -->
-                    <div style="display:flex; justify-content:space-between; position:relative; margin-bottom:32px; text-align:center;">
-                        <div style="position:absolute; top:12px; left:30px; right:30px; height:2px; background:var(--border); z-index:0;"></div>
-                        
-                        <div style="position:relative; z-index:1; width:60px;">
-                            <div style="width:26px; height:26px; background:var(--primary); color:white; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; margin:0 auto 8px;">1</div>
-                            <div style="font-size:11px; font-weight:600; color:var(--primary);">Configuration</div>
-                            <div style="font-size:10px; color:var(--primary); opacity:0.8;">In Progress</div>
-                        </div>
-                        <div style="position:relative; z-index:1; width:60px;">
-                            <div style="width:26px; height:26px; background:var(--surface); border:2px solid var(--border); color:var(--muted); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; margin:0 auto 8px;">2</div>
-                            <div style="font-size:11px; font-weight:600; color:var(--muted);">Download</div>
-                            <div style="font-size:10px; color:var(--muted-lt);">Pending</div>
-                        </div>
-                        <div style="position:relative; z-index:1; width:60px;">
-                            <div style="width:26px; height:26px; background:var(--surface); border:2px solid var(--border); color:var(--muted); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; margin:0 auto 8px;">3</div>
-                            <div style="font-size:11px; font-weight:600; color:var(--muted);">Scan Running</div>
-                            <div style="font-size:10px; color:var(--muted-lt);">Pending</div>
-                        </div>
-                        <div style="position:relative; z-index:1; width:60px;">
-                            <div style="width:26px; height:26px; background:var(--surface); border:2px solid var(--border); color:var(--muted); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; margin:0 auto 8px;">4</div>
-                            <div style="font-size:11px; font-weight:600; color:var(--muted);">Report</div>
-                            <div style="font-size:10px; color:var(--muted-lt);">Pending</div>
-                        </div>
+                    <div style="display:flex; gap:10px;">
+                        <a href="#" id="downloadXmlBtn" class="btn btn-outline" target="_blank" style="flex:1;">&#128196; Export XML</a>
+                        <a href="#" id="viewXmlBtn" class="btn btn-outline" target="_blank" style="padding:10px 14px;">&#128065;</a>
                     </div>
-
-                    <div class="section-title" style="color:var(--text); font-weight:700;">💡 Quick Steps</div>
-                    <div style="display:flex; flex-direction:column; gap:16px;">
-                        <div style="display:flex; gap:12px; align-items:flex-start;">
-                            <div style="width:24px; height:24px; border-radius:50%; background:rgba(37,99,235,0.1); color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0;">1</div>
-                            <div style="font-size:12.5px; color:var(--text-2); line-height:1.4;">Verify or adjust the branch configuration on the left.</div>
-                        </div>
-                        <div style="display:flex; gap:12px; align-items:flex-start;">
-                            <div style="width:24px; height:24px; border-radius:50%; background:rgba(37,99,235,0.1); color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0;">2</div>
-                            <div style="font-size:12.5px; color:var(--text-2); line-height:1.4;">Click <b>Start Compliance Audit</b> to download the secure launcher.</div>
-                        </div>
-                        <div style="display:flex; gap:12px; align-items:flex-start;">
-                            <div style="width:24px; height:24px; border-radius:50%; background:rgba(37,99,235,0.1); color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0;">3</div>
-                            <div style="font-size:12.5px; color:var(--text-2); line-height:1.4;">Run the downloaded file. It collects extended hardware and software data.</div>
-                        </div>
-                        <div style="display:flex; gap:12px; align-items:flex-start;">
-                            <div style="width:24px; height:24px; border-radius:50%; background:rgba(16,185,129,0.1); color:var(--success); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0;">4</div>
-                            <div style="font-size:12.5px; color:var(--text-2); line-height:1.4;">This page updates automatically with PDF &amp; XML download links.</div>
-                        </div>
-                    </div>
-
-                    <hr class="divider" style="margin:24px 0;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-                        <div class="section-title" style="margin:0; color:var(--text); font-weight:700;">🗄️ Data Collected</div>
-                        <span style="font-size:11px; color:var(--primary); background:#eff6ff; padding:2px 8px; border-radius:12px; cursor:pointer;">View all</span>
-                    </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2);">
-                            <span style="color:var(--success); font-size:14px;">✓</span> OS, License &amp; Updates
-                        </div>
-                        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2);">
-                            <span style="color:var(--success); font-size:14px;">✓</span> Disk Partitions &amp; Peripherals
-                        </div>
-                        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2);">
-                            <span style="color:var(--success); font-size:14px;">✓</span> CPU, RAM, Disk, GPU
-                        </div>
-                        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2);">
-                            <span style="color:var(--success); font-size:14px;">✓</span> Full Software Inventory
-                        </div>
-                        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2);">
-                            <span style="color:var(--success); font-size:14px;">✓</span> Serial No. &amp; Manufacturer
-                        </div>
-                        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2);">
-                            <span style="color:var(--success); font-size:14px;">✓</span> Antivirus, Printers, Hotfixes
-                        </div>
-                        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2);">
-                            <span style="color:var(--success); font-size:14px;">✓</span> Network Adapters &amp; Config
-                        </div>
-                        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2);">
-                            <span style="color:var(--success); font-size:14px;">✓</span> BIOS &amp; System Info
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card" style="padding:20px;">
-                    <div class="section-title" style="color:var(--primary); font-weight:700; display:flex; align-items:center; gap:8px;">
-                        <span>📄</span> Last Audit Summary
-                    </div>
-                    <table style="width:100%; text-align:left; font-size:12px;">
-                        <thead>
-                            <tr style="color:var(--muted); border-bottom:1px solid var(--border);">
-                                <th style="padding-bottom:8px; font-weight:600;">Date</th>
-                                <th style="padding-bottom:8px; font-weight:600;">Status</th>
-                                <th style="padding-bottom:8px; font-weight:600;">Devices</th>
-                                <th style="padding-bottom:8px; font-weight:600;">Report</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td style="padding-top:12px; color:var(--text);">&mdash;</td>
-                                <td style="padding-top:12px; color:var(--muted);">Not Started</td>
-                                <td style="padding-top:12px; color:var(--text);">&mdash;</td>
-                                <td style="padding-top:12px; color:var(--text);">&mdash;</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Right Column: Illustration & Info -->
-            <div style="display:flex; flex-direction:column; gap:24px;">
-                <div style="display:flex; justify-content:center; padding:20px 0;">
-                    <!-- A simple placeholder for the laptop illustration with a shield -->
-                    <div style="width:100%; max-width:240px; text-align:center;">
-                        <svg viewBox="0 0 200 150" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto;">
-                            <!-- Clouds & Wifi -->
-                            <path d="M40 50 Q 50 30 70 50 Q 90 40 100 60 Q 110 50 120 60 L 40 60 Z" fill="#e2e8f0" opacity="0.5"/>
-                            <path d="M140 40 Q 150 20 170 40 Q 190 30 200 50 Q 210 40 220 50 L 140 50 Z" fill="#e2e8f0" opacity="0.3"/>
-                            <circle cx="170" cy="30" r="15" fill="#dcfce7"/>
-                            <path d="M165 30 A 10 10 0 0 1 175 30" stroke="#16a34a" stroke-width="2" stroke-linecap="round"/>
-                            <path d="M162 25 A 15 15 0 0 1 178 25" stroke="#16a34a" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
-                            <!-- Laptop Base -->
-                            <rect x="30" y="60" width="140" height="80" rx="4" fill="#64748b"/>
-                            <rect x="34" y="64" width="132" height="72" fill="#eff6ff"/>
-                            <rect x="10" y="140" width="180" height="10" rx="4" fill="#94a3b8"/>
-                            <!-- Screen Content -->
-                            <rect x="40" y="70" width="100" height="8" rx="2" fill="#3b82f6" opacity="0.2"/>
-                            <rect x="40" y="85" width="80" height="6" rx="2" fill="#cbd5e1"/>
-                            <rect x="40" y="95" width="90" height="6" rx="2" fill="#cbd5e1"/>
-                            <rect x="40" y="105" width="70" height="6" rx="2" fill="#cbd5e1"/>
-                            <!-- Checkmarks -->
-                            <path d="M45 87 L 48 90 L 53 84" stroke="#3b82f6" stroke-width="2" fill="none"/>
-                            <path d="M45 97 L 48 100 L 53 94" stroke="#3b82f6" stroke-width="2" fill="none"/>
-                            <path d="M45 107 L 48 110 L 53 104" stroke="#3b82f6" stroke-width="2" fill="none"/>
-                            <!-- Shield -->
-                            <path d="M140 85 L 170 85 L 170 115 C 170 130 155 140 140 145 C 125 140 110 130 110 115 L 110 85 Z" fill="#3b82f6"/>
-                            <path d="M125 110 L 135 120 L 155 100" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-                        </svg>
-                    </div>
-                </div>
-                
-                <div class="card" style="background:#f8fafc; border:none;">
-                    <div style="font-size:15px; font-weight:700; color:var(--text); margin-bottom:8px;">Automated. Accurate. Compliant.</div>
-                    <div style="font-size:12px; color:var(--muted); line-height:1.5; margin-bottom:24px;">One click is all it takes to audit your branch and stay compliant.</div>
-                    
-                    <div style="display:flex; flex-direction:column; gap:20px;">
-                        <div style="display:flex; gap:12px; align-items:flex-start;">
-                            <div style="width:32px; height:32px; border-radius:50%; background:#eff6ff; color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0;">🔒</div>
-                            <div>
-                                <div style="font-size:13px; font-weight:700; color:var(--text); margin-bottom:2px;">Secure Scanning</div>
-                                <div style="font-size:12px; color:var(--muted); line-height:1.4;">End-to-end encrypted data collection</div>
-                            </div>
-                        </div>
-                        <div style="display:flex; gap:12px; align-items:flex-start;">
-                            <div style="width:32px; height:32px; border-radius:50%; background:#eff6ff; color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0;">⚡</div>
-                            <div>
-                                <div style="font-size:13px; font-weight:700; color:var(--text); margin-bottom:2px;">Fast &amp; Lightweight</div>
-                                <div style="font-size:12px; color:var(--muted); line-height:1.4;">Optimized for speed with minimal system impact</div>
-                            </div>
-                        </div>
-                        <div style="display:flex; gap:12px; align-items:flex-start;">
-                            <div style="width:32px; height:32px; border-radius:50%; background:#eff6ff; color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0;">📄</div>
-                            <div>
-                                <div style="font-size:13px; font-weight:700; color:var(--text); margin-bottom:2px;">Comprehensive Reports</div>
-                                <div style="font-size:12px; color:var(--muted); line-height:1.4;">Detailed PDF &amp; XML reports for easy compliance</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ─────────────────────────────────────────────────────────────
-         TAB 2: ASSET REGISTRY
-    ───────────────────────────────────────────────────────────────── -->
-    <div class="tab-panel" id="panel-assets" role="tabpanel">
-        <div style="display:grid; grid-template-columns:380px 1fr; gap:24px; align-items:start;">
-
-            <!-- Left: Form -->
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-icon orange">🗂️</div>
-                    <div>
-                        <div class="card-title" id="assetFormTitle">Register Asset</div>
-                        <div class="card-subtitle">Add or update device metadata</div>
-                    </div>
-                </div>
-
-                <input type="hidden" id="editingDeviceId">
-
-                <div style="display:flex; flex-direction:column; gap:14px;">
-                    <div class="form-group">
-                        <label for="assetDeviceId">Device ID / Hostname *</label>
-                        <input type="text" id="assetDeviceId" class="input-field" placeholder="e.g. PC-BRANCH-01">
-                    </div>
-                    <div class="form-group">
-                        <label for="assetTag">Asset Tag</label>
-                        <input type="text" id="assetTag" class="input-field" placeholder="e.g. NSDL-AST-2024-001">
-                    </div>
-                    <div class="form-group">
-                        <label for="assetOwner">Owner / Assignee</label>
-                        <input type="text" id="assetOwner" class="input-field" placeholder="Full name">
-                    </div>
-                    <div class="form-group">
-                        <label for="assetDept">Department</label>
-                        <input type="text" id="assetDept" class="input-field" placeholder="e.g. Finance, IT, Operations">
-                    </div>
-                    <div class="form-group">
-                        <label for="assetLocation">Location / Branch</label>
-                        <input type="text" id="assetLocation" class="input-field" placeholder="e.g. Mumbai HQ, Floor 3">
-                    </div>
-                    <div class="form-grid" style="grid-template-columns:1fr 1fr;">
-                        <div class="form-group">
-                            <label for="assetPurchaseDate">Purchase Date</label>
-                            <input type="date" id="assetPurchaseDate" class="input-field">
-                        </div>
-                        <div class="form-group">
-                            <label for="assetPrice">Purchase Price (₹)</label>
-                            <input type="text" id="assetPrice" class="input-field" placeholder="e.g. 45000">
-                        </div>
-                    </div>
-                    <div class="form-grid" style="grid-template-columns:1fr 1fr;">
-                        <div class="form-group">
-                            <label for="assetWarrantyStart">Warranty Start Date</label>
-                            <input type="date" id="assetWarrantyStart" class="input-field">
-                        </div>
-                        <div class="form-group">
-                            <label for="assetWarranty">Warranty End Date</label>
-                            <input type="date" id="assetWarranty" class="input-field">
-                        </div>
-                    </div>
-                    <div class="form-grid" style="grid-template-columns:1fr 1fr;">
-                        <div class="form-group">
-                            <label for="assetWarrantyProvider">Warranty Provider</label>
-                            <input type="text" id="assetWarrantyProvider" class="input-field" placeholder="e.g. Dell ProSupport">
-                        </div>
-                        <div class="form-group">
-                            <label for="assetLifecycle">Life Cycle Stage</label>
-                            <select id="assetLifecycle" class="input-field">
-                                <option value="Active">🟢 Active</option>
-                                <option value="Maintenance">🟡 Maintenance</option>
-                                <option value="EOL">🟠 End of Life</option>
-                                <option value="Retired">🔴 Retired</option>
-                                <option value="Decommissioned">⚫ Decommissioned</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="assetWarrantyNotes">Warranty Notes</label>
-                        <input type="text" id="assetWarrantyNotes" class="input-field" placeholder="e.g. Extended warranty, on-site support">
-                    </div>
-                    <div class="form-group">
-                        <label for="assetVendor">Vendor</label>
-                        <input type="text" id="assetVendor" class="input-field" placeholder="e.g. Dell India, HP, Lenovo">
-                    </div>
-                    <div class="form-grid" style="grid-template-columns:1fr 1fr;">
-                        <div class="form-group">
-                            <label for="assetSupplier">Supplier</label>
-                            <input type="text" id="assetSupplier" class="input-field" placeholder="e.g. Ingram Micro, Redington">
-                        </div>
-                        <div class="form-group">
-                            <label for="assetPoNumber">PO Number</label>
-                            <input type="text" id="assetPoNumber" class="input-field" placeholder="e.g. PO-2024-001234">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="assetNotes">Notes</label>
-                        <textarea id="assetNotes" class="input-field" rows="2" placeholder="Additional remarks..."></textarea>
-                    </div>
-                </div>
-
-                <div style="display:flex; gap:10px; margin-top:20px; padding-top:20px; border-top:1px solid var(--border);">
-                    <button class="btn btn-primary" onclick="saveAsset()" style="flex:1;" id="saveAssetBtn">💾 Save Asset</button>
-                    <button class="btn btn-outline" onclick="clearAssetForm()" style="padding:10px 14px;">✕</button>
-                </div>
-
-                <div id="assetSaveStatus" style="margin-top:12px; display:none;"></div>
-            </div>
-
-            <!-- Right: Table -->
-            <div class="card">
-                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
-                    <div>
-                        <div class="card-title">Registered Assets</div>
-                        <div class="card-subtitle" id="assetCount">Loading…</div>
-                    </div>
-                    <button class="btn btn-outline btn-sm" onclick="loadAssets()">🔄 Refresh</button>
-                </div>
-
-                <div class="search-wrap" style="margin-bottom:16px;">
-                    <span class="search-icon">🔍</span>
-                    <input type="text" class="input-field search-input" id="assetSearch"
-                        placeholder="Search by device, owner, location…"
-                        oninput="filterAssets()">
-                </div>
-
-                <div class="table-wrap">
-                    <table id="assetsTable">
-                        <thead>
-                            <tr>
-                                <th>Device ID</th>
-                                <th>Owner</th>
-                                <th>Location</th>
-                                <th>Vendor</th>
-                                <th>Status</th>
-                                <th>Warranty</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="assetsTableBody">
-                            <tr>
-                                <td colspan="7">
-                                    <div class="empty-state">
-                                        <div class="empty-icon">🗂️</div>
-                                        <h3>No assets registered</h3>
-                                        <p>Use the form on the left to register your first asset.</p>
-                                    </div>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
                 </div>
             </div>
 
@@ -1236,7 +988,7 @@
     </div>
 
     <!-- ─────────────────────────────────────────────────────────────
-         TAB 3: NETWORK DISCOVERY
+         TAB 2: INFRAPULSE (Network Device Discovery)
     ───────────────────────────────────────────────────────────────── -->
     <div class="tab-panel" id="panel-discovery" role="tabpanel">
 
@@ -2243,8 +1995,7 @@ function switchTab(tab) {
 
     const titles = {
         'audit': { title: 'Compliance Audit', sub: 'Discover, Audit & Ensure Compliance' },
-        'assets': { title: 'Asset Registry', sub: 'Manage & Register Devices' },
-        'discovery': { title: 'Info Gathering', sub: 'Network Device Discovery' },
+        'discovery': { title: 'Infrapulse', sub: 'Network Device Discovery' },
         'software': { title: 'Device Audits', sub: 'Software & Hardware Inspection' },
         'wifi': { title: 'WiFi Dashboard', sub: 'Network Security & Metrics' },
         'alldevices': { title: 'All Devices', sub: 'Comprehensive Device Overview' }
@@ -2253,8 +2004,6 @@ function switchTab(tab) {
         document.getElementById('pageTitle').textContent = titles[tab].title;
         document.getElementById('pageSubtitle').textContent = titles[tab].sub;
     }
-
-    if (tab === 'assets')       loadAssets();
     if (tab === 'software')     refreshDeviceList();
     if (tab === 'alldevices')   loadAllDevices();
 }
@@ -2371,10 +2120,13 @@ document.getElementById('downloadBtn').addEventListener('mousedown', updateDownl
 function triggerScanDownload() {
     updateDownloadUrl();
     setTimeout(() => {
-        document.getElementById('setupView').style.display = 'none';
-        document.getElementById('processingView').style.display = 'block';
+        // The hero stays as it is. We hand over to the WiFi Dashboard, so flipping
+        // this tab to "Audit in progress" only meant the user came back to a stale
+        // progress screen. Progress is shown by the status badge instead; the views
+        // below switch themselves once the result actually arrives.
         setGlobalStatus('busy', 'Audit In Progress…');
         startPolling();
+        switchTab('wifi');
     }, 800);
 }
 
@@ -2396,6 +2148,7 @@ function startPolling() {
 }
 
 function showAuditSuccess(session) {
+    document.getElementById('setupView').style.display      = 'none';
     document.getElementById('processingView').style.display = 'none';
     document.getElementById('successState').style.display  = 'block';
     setGlobalStatus('ok', 'Audit Complete');
@@ -2407,6 +2160,10 @@ function showAuditSuccess(session) {
 
 function showAuditFailed(msg) {
     const pv = document.getElementById('processingView');
+    // processingView is hidden while the hero is shown, so reveal it - otherwise
+    // the failure text would be written into an invisible element.
+    document.getElementById('setupView').style.display = 'none';
+    pv.style.display = 'block';
     setGlobalStatus('err', 'Audit Failed');
     const safe = msg.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     pv.innerHTML = `
@@ -2414,185 +2171,6 @@ function showAuditFailed(msg) {
         <h2 style="font-size:20px; font-weight:800; color:var(--danger); margin-bottom:8px;">Audit Failed</h2>
         <p style="color:var(--muted); font-size:13px; max-width:360px; margin:0 auto;">${safe}</p>
     `;
-}
-
-// ────────────────────────────────────────────────────────────────────
-//  TAB 2 — ASSET REGISTRY
-// ────────────────────────────────────────────────────────────────────
-let allAssets = [];
-
-async function loadAssets() {
-    try {
-        const r    = await fetch('/assets');
-        const data = await r.json();
-        allAssets  = data.assets || [];
-        renderAssetsTable(allAssets);
-        document.getElementById('assetCount').textContent = `${allAssets.length} asset${allAssets.length !== 1 ? 's' : ''} registered`;
-    } catch(e) {
-        console.error('Assets fetch error:', e);
-    }
-}
-
-function renderAssetsTable(assets) {
-    const tbody = document.getElementById('assetsTableBody');
-    if (!assets.length) {
-        tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
-            <div class="empty-icon">🗂️</div>
-            <h3>No assets registered</h3>
-            <p>Use the form on the left to register your first asset.</p>
-        </div></td></tr>`;
-        return;
-    }
-
-    const lcBadge = {
-        'Active':         '<span class="badge badge-green">🟢 Active</span>',
-        'Maintenance':    '<span class="badge badge-orange">🟡 Maintenance</span>',
-        'EOL':            '<span class="badge badge-orange">🟠 EOL</span>',
-        'Retired':        '<span class="badge badge-red">🔴 Retired</span>',
-        'Decommissioned': '<span class="badge badge-gray">⚫ Decommissioned</span>',
-    };
-
-    tbody.innerHTML = assets.map(a => {
-        const warrantyDate = a.warranty_expiry ? new Date(a.warranty_expiry) : null;
-        const now          = new Date();
-        let warrantyHtml   = a.warranty_expiry || '—';
-        if (warrantyDate) {
-            const diffDays = Math.ceil((warrantyDate - now) / 86400000);
-            if (diffDays < 0)       warrantyHtml = `<span class="badge badge-red">Expired</span>`;
-            else if (diffDays < 90) warrantyHtml = `<span class="badge badge-orange">${a.warranty_expiry}</span>`;
-            else                    warrantyHtml = `<span style="color:var(--text-2);">${a.warranty_expiry}</span>`;
-        }
-        return `<tr class="scan-result-enter">
-            <td><b class="td-mono">${esc(a.device_id)}</b><br>
-                <span style="font-size:11px; color:var(--muted);">${esc(a.asset_tag || '')}</span></td>
-            <td>${esc(a.owner || '—')}<br>
-                <span style="font-size:11px; color:var(--muted);">${esc(a.department || '')}</span></td>
-            <td>${esc(a.location || '—')}</td>
-            <td>${esc(a.vendor || '—')}</td>
-            <td>${lcBadge[a.status || a.life_cycle_stage] || `<span class="badge badge-gray">${esc(a.status || a.life_cycle_stage || '—')}</span>`}</td>
-            <td>${warrantyHtml}</td>
-            <td>
-                <div style="display:flex; gap:6px;">
-                    <button class="btn btn-outline btn-sm" onclick="editAsset('${esc(a.device_id)}')">✏️</button>
-                    <button class="btn btn-danger btn-sm" onclick="deleteAsset('${esc(a.device_id)}')">🗑️</button>
-                </div>
-            </td>
-        </tr>`;
-    }).join('');
-}
-
-function filterAssets() {
-    const q = document.getElementById('assetSearch').value.toLowerCase();
-    const filtered = allAssets.filter(a =>
-        (a.device_id  || '').toLowerCase().includes(q) ||
-        (a.owner      || '').toLowerCase().includes(q) ||
-        (a.location   || '').toLowerCase().includes(q) ||
-        (a.vendor     || '').toLowerCase().includes(q) ||
-        (a.asset_tag  || '').toLowerCase().includes(q)
-    );
-    renderAssetsTable(filtered);
-}
-
-async function saveAsset() {
-    const deviceId = document.getElementById('assetDeviceId').value.trim();
-    if (!deviceId) {
-        showAssetStatus('Device ID is required.', 'error');
-        return;
-    }
-    const payload = {
-        device_id:          deviceId,
-        asset_tag:          document.getElementById('assetTag').value.trim(),
-        owner:              document.getElementById('assetOwner').value.trim(),
-        department:         document.getElementById('assetDept').value.trim(),
-        location:           document.getElementById('assetLocation').value.trim(),
-        purchase_date:      document.getElementById('assetPurchaseDate').value,
-        purchase_price:     document.getElementById('assetPrice').value.trim(),
-        warranty_start_date:document.getElementById('assetWarrantyStart').value,
-        warranty_expiry:    document.getElementById('assetWarranty').value,
-        warranty_provider:  document.getElementById('assetWarrantyProvider').value.trim(),
-        warranty_notes:     document.getElementById('assetWarrantyNotes').value.trim(),
-        status:             document.getElementById('assetLifecycle').value,
-        vendor:             document.getElementById('assetVendor').value.trim(),
-        supplier:           document.getElementById('assetSupplier').value.trim(),
-        po_number:          document.getElementById('assetPoNumber').value.trim(),
-        notes:              document.getElementById('assetNotes').value.trim(),
-    };
-    const btn    = document.getElementById('saveAssetBtn');
-    btn.disabled = true;
-    btn.textContent = 'Saving…';
-    try {
-        const r = await fetch('/asset-metadata', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload),
-        });
-        if (r.ok) {
-            showAssetStatus('✅ Asset saved successfully!', 'success');
-            clearAssetForm();
-            loadAssets();
-        } else {
-            showAssetStatus('❌ Save failed. Please try again.', 'error');
-        }
-    } catch(e) {
-        showAssetStatus('❌ Network error.', 'error');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '💾 Save Asset';
-    }
-}
-
-async function editAsset(deviceId) {
-    try {
-        const r = await fetch(`/asset-metadata/${encodeURIComponent(deviceId)}`);
-        if (!r.ok) return;
-        const a = await r.json();
-        document.getElementById('assetDeviceId').value       = a.device_id || '';
-        document.getElementById('assetTag').value            = a.asset_tag || '';
-        document.getElementById('assetOwner').value          = a.owner || '';
-        document.getElementById('assetDept').value           = a.department || '';
-        document.getElementById('assetLocation').value       = a.location || '';
-        document.getElementById('assetPurchaseDate').value   = a.purchase_date || '';
-        document.getElementById('assetPrice').value          = a.purchase_price || '';
-        document.getElementById('assetWarrantyStart').value  = a.warranty_start_date || '';
-        document.getElementById('assetWarranty').value       = a.warranty_expiry || '';
-        document.getElementById('assetWarrantyProvider').value= a.warranty_provider || '';
-        document.getElementById('assetWarrantyNotes').value  = a.warranty_notes || '';
-        document.getElementById('assetLifecycle').value      = a.status || a.life_cycle_stage || 'Active';
-        document.getElementById('assetVendor').value         = a.vendor || '';
-        document.getElementById('assetSupplier').value       = a.supplier || '';
-        document.getElementById('assetPoNumber').value       = a.po_number || '';
-        document.getElementById('assetNotes').value          = a.notes || '';
-        document.getElementById('assetFormTitle').textContent = 'Edit Asset';
-        document.getElementById('assetDeviceId').focus();
-    } catch(e) { console.error(e); }
-}
-
-async function deleteAsset(deviceId) {
-    if (!confirm(`Delete asset "${deviceId}"? This cannot be undone.`)) return;
-    try {
-        await fetch(`/asset-metadata/${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
-        loadAssets();
-    } catch(e) { console.error(e); }
-}
-
-function clearAssetForm() {
-    ['assetDeviceId','assetTag','assetOwner','assetDept','assetLocation',
-     'assetPurchaseDate','assetPrice','assetWarrantyStart','assetWarranty',
-     'assetWarrantyProvider','assetWarrantyNotes','assetVendor','assetSupplier',
-     'assetPoNumber','assetNotes'].forEach(id => {
-        document.getElementById(id).value = '';
-    });
-    document.getElementById('assetLifecycle').value = 'Active';
-    document.getElementById('assetFormTitle').textContent = 'Register Asset';
-    document.getElementById('assetSaveStatus').style.display = 'none';
-}
-
-function showAssetStatus(msg, type) {
-    const el = document.getElementById('assetSaveStatus');
-    el.style.display = 'block';
-    el.className     = `alert alert-${type === 'success' ? 'success' : 'danger'}`;
-    el.textContent   = msg;
-    setTimeout(() => { el.style.display = 'none'; }, 4000);
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -2657,11 +2235,6 @@ function renderScanResults(data) {
                 <td style="color:var(--text-2);">${esc(d.hostname || 'N/A')}</td>
                 <td>${(d.port_labels || []).map(p => `<span class="port-tag">${esc(p)}</span>`).join(' ')}</td>
                 <td><span class="badge badge-blue">${esc(d.device_type)}</span></td>
-                <td>
-                    <button class="btn btn-outline btn-sm" onclick="registerDiscoveredAsset('${esc(d.ip)}','${esc(d.hostname)}','${esc(d.device_type)}')">
-                        ➕ Register
-                    </button>
-                </td>
             </tr>
         `).join('');
     }
@@ -2669,13 +2242,6 @@ function renderScanResults(data) {
     document.getElementById('scanResults').style.display = 'block';
 }
 
-function registerDiscoveredAsset(ip, hostname, deviceType) {
-    document.getElementById('assetDeviceId').value = hostname !== 'N/A' ? hostname : ip;
-    document.getElementById('assetLocation').value = ip;
-    document.getElementById('assetNotes').value    = `Discovered via network scan. Device type: ${deviceType}. IP: ${ip}`;
-    switchTab('assets');
-    document.getElementById('assetDeviceId').focus();
-}
 
 function exportScanResults() {
     if (!scanData.length) return;
@@ -3915,7 +3481,6 @@ async function submitRemoteAudit() {
             setTimeout(() => {
                 closeRemoteAuditModal();
                 rescanWifiDevices();
-                loadAssets(); // also refresh main assets table
             }, 2000);
             
         } else {

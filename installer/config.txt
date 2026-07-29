@@ -16,7 +16,7 @@
 # IMPORTANT: give the server a fixed address first (DHCP reservation on
 # the router, and a wired connection). If the server's ip changes, every
 # installed PC stops reporting and has to be visited again.
-SERVER_URL=http://10.111.50.57:8000
+SERVER_URL=http://192.168.1.26:8000
 
 # How often the audit runs automatically, in hours.
 # The audit also runs once at every startup, regardless of this value.

@@ -1,1 +1,69 @@
 claude --resume 3801772e-8a77-4d13-859d-e3bbb2796ff6
+
+
+
+bat /sh set in - startup folder 
+
+
+Here's the simplest way to schedule a .bat file using Task Scheduler in Windows.
+
+Step 1: Open Task Scheduler
+Press Windows + R.
+
+Type:
+
+taskschd.msc
+Press Enter.
+Step 2: Create a New Task
+In the right panel, click Create Basic Task....
+Step 3: Give the Task a Name
+
+Enter a name, for example:
+
+My BAT File
+Click Next.
+Step 4: Choose When to Run It
+
+Select the trigger based on when you want the BAT file to run:
+
+When the computer starts – Runs every time Windows starts.
+When I log on – Runs every time you log in.
+Daily – Runs every day at a specific time.
+One time – Runs only once.
+
+For example, choose When I log on if you want it to run after you sign in.
+
+Step 5: Choose the Action
+Select Start a program.
+Click Next.
+Step 6: Select Your BAT File
+Click Browse....
+
+Select your .bat file, for example:
+
+C:\Scripts\backup.bat
+Click Next.
+Step 7: Finish
+Review the settings.
+Click Finish.
+
+Your BAT file is now scheduled and will run automatically according to the trigger you selected.
+
+How to Test It
+Open Task Scheduler.
+Find your task in Task Scheduler Library.
+Right-click the task and choose Run.
+
+If the BAT file executes successfully, your task is configured correctly.
+
+Run with Administrator Privileges (Optional)
+
+If your BAT file requires administrator permissions:
+
+Open Task Scheduler.
+Right-click your task and select Properties.
+Go to the General tab.
+Check Run with highest privileges.
+Click OK.
+
+Now the BAT file will run with administrator privileges whenever the task is triggered.
