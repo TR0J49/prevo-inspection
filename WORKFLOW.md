@@ -6,7 +6,7 @@
 
 ## 1. What this project is
 
-Infrapulse is a system that answers one question for every computer in an NSDL
+Infrapulse is a system that answers one question for every computer
 branch office:
 
 > *"What exactly is on this machine, and is it compliant?"*
@@ -80,7 +80,7 @@ optional remote-audit feature).
 | **PostgreSQL** | Stores audit history and sessions | Reliable, handles JSON natively (JSONB), proven at scale |
 | **psycopg2** | Connects Python to PostgreSQL | Standard, well-tested driver with connection pooling |
 | **ReportLab** | Generates the PDF report | Full control over layout, tables and page furniture |
-| **xml.etree** (built-in) | Generates the XML report | Machine-readable output for other NSDL systems |
+| **xml.etree** (built-in) | Generates the XML report | Machine-readable output for other systems |
 | **python-dotenv** | Reads database settings from `.env` | Keeps passwords out of the source code |
 
 ### Client side (the workstations)
@@ -217,12 +217,12 @@ flowchart TD
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| Folder | `C:\ProgramData\NSDLAudit\` | `/Library/Application Support/NSDLAudit/` | `/var/lib/nsdl-audit/` |
+| Folder | `C:\ProgramData\Audit\` | `/Library/Application Support/Audit/` | `/var/lib/-audit/` |
 | `device.id` | permanent machine identity | same | same |
 | `config.txt` | server address & interval | same | same |
 | `run-audit.ps1` / `.sh` | the small runner | same | same |
 | `audit.log` | what happened, when | same | same |
-| Schedule | Task Scheduler → *NSDL Compliance Audit* | `com.nsdl.audit` LaunchDaemon | `nsdl-audit.timer` |
+| Schedule | Task Scheduler → *Compliance Audit* | `com..audit` LaunchDaemon | `-audit.timer` |
 
 Total footprint: **under 20 KB**. No service, no background process sitting in
 memory — the OS scheduler wakes the script only when it is due.
@@ -495,7 +495,7 @@ prevo inspection/
 
 ## 12. One-paragraph summary
 
-> Infrapulse gives NSDL a live, accurate inventory of every workstation in every
+> Infrapulse gives a live, accurate inventory of every workstation in every
 > branch. A small agent — installed once per PC in about two minutes from a USB
 > stick — makes each machine report itself every three hours using tools already
 > built into its operating system. The audit server validates every submission,

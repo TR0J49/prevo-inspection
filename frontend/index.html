@@ -2232,7 +2232,15 @@ function renderScanResults(data) {
         tbody.innerHTML = data.discovered.map(d => `
             <tr class="scan-result-enter">
                 <td><b class="td-mono">${esc(d.ip)}</b></td>
-                <td style="color:var(--text-2);">${esc(d.hostname || 'N/A')}</td>
+                <td style="color:var(--text-2);">
+                    ${esc(d.hostname || d.ip)}
+                    ${d.name_source && d.name_source !== 'unresolved'
+                        ? `<span class="badge badge-${d.name_source === 'audit' ? 'green' : 'blue'}" style="margin-left:6px; font-size:9.5px;">${esc(
+                              d.name_source === 'audit'   ? 'audited'  :
+                              d.name_source === 'netbios' ? 'NetBIOS'  :
+                              d.name_source === 'dns'     ? 'DNS'      : 'vendor')}</span>`
+                        : `<span style="color:var(--muted-lt); font-size:10.5px; margin-left:6px;">name not published</span>`}
+                </td>
                 <td>${(d.port_labels || []).map(p => `<span class="port-tag">${esc(p)}</span>`).join(' ')}</td>
                 <td><span class="badge badge-blue">${esc(d.device_type)}</span></td>
             </tr>

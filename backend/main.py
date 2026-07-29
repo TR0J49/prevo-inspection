@@ -2060,6 +2060,7 @@ def network_scan(request: NetworkScanRequest):
             discovered_dict[ip_str] = {
                 "ip":          ip_str,
                 "hostname":    hostname,
+                "mac":         mac_str,
                 "open_ports":  [],
                 "port_labels": [f"MAC: {mac_str}"],
                 "device_type": dev_type,
@@ -2069,8 +2070,110 @@ def network_scan(request: NetworkScanRequest):
         logger.error(f"ARP scan fallback failed: {e}")
 
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Name enrichment.
+    #
+    # Reverse DNS only works when the network has a DNS server holding PTR
+    # records for local machines. Most branch LANs do not, so on its own it
+    # leaves the Hostname column showing a bare IP for the majority of devices.
+    # Try three better sources first, cheapest and most reliable first.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # 0. Attach MAC addresses from the ARP table - the port scan does not see them,
+    #    but they drive both the vendor label and future matching.
+    try:
+        arp_macs = {}
+        _arp_out, _ = _run_cmd("arp -a")
+        for _l in _arp_out.splitlines():
+            _p = _l.split()
+            if len(_p) >= 2 and _p[0].count(".") == 3:
+                arp_macs[_p[0]] = _p[1]
+        for _ip, _dev in discovered_dict.items():
+            if not _dev.get("mac") and _ip in arp_macs:
+                _dev["mac"] = arp_macs[_ip]
+    except Exception:
+        pass
+
+    # 1. A device we have audited before — this is its REAL computer name.
+    audit_ip_index: dict = {}
+    try:
+        for fn in os.listdir(USER_INFO_DIR):
+            if not (fn.endswith(".json") and fn.startswith("audit_")):
+                continue
+            try:
+                with open(os.path.join(USER_INFO_DIR, fn), encoding="utf-8") as f:
+                    d = json.load(f)
+            except Exception:
+                continue
+            name = d.get("computer_name")
+            if not name:
+                continue
+            ips = []
+            for net in d.get("network_details", []) or []:
+                ips += [x.strip() for x in str(net.get("ip_address", "")).split(",")]
+            hw = d.get("hardware_details", {})
+            for ad in (hw.get("network_adapters", []) or []):
+                ips += [x.strip() for x in str(ad.get("ipv4_addresses", "")).split(",")]
+            for ip_clean in ips:
+                if ip_clean and ip_clean not in ("Unknown", "0.0.0.0", ""):
+                    audit_ip_index.setdefault(ip_clean, name)
+    except Exception as e:
+        logger.error(f"Audit-name index failed: {e}")
+
+    needs_name = []
+    for ip_str, dev in discovered_dict.items():
+        known = audit_ip_index.get(ip_str)
+        if known:
+            dev["hostname"] = known
+            dev["name_source"] = "audit"
+        elif dev.get("hostname") and dev["hostname"] != ip_str:
+            dev["name_source"] = "dns"          # reverse DNS already found it
+        else:
+            needs_name.append(ip_str)
+
+    # 2. NetBIOS — resolves Windows machines even with no DNS server present.
+    if needs_name:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(24, len(needs_name)))
+        try:
+            futures = {executor.submit(_get_netbios_info, ip): ip for ip in needs_name}
+            done, _ = concurrent.futures.wait(futures, timeout=8)
+            for fut in done:
+                ip_str = futures[fut]
+                try:
+                    info = fut.result() or {}
+                except Exception:
+                    continue
+                if info.get("hostname"):
+                    discovered_dict[ip_str]["hostname"] = info["hostname"]
+                    discovered_dict[ip_str]["name_source"] = "netbios"
+                if info.get("username"):
+                    discovered_dict[ip_str]["username"] = info["username"]
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    # 3. Still nameless: label it by hardware vendor from the MAC address so the
+    #    column reads "Apple device" rather than repeating the IP.
+    for ip_str, dev in discovered_dict.items():
+        if dev.get("name_source"):
+            continue
+        mac = dev.get("mac", "")
+        vendor = _mac_vendor(mac) if mac else ""
+        if vendor:
+            dev["hostname"] = f"{vendor} device"
+            dev["name_source"] = "mac-vendor"
+        elif _mac_is_randomised(mac):
+            # Almost always a phone or tablet using MAC randomisation
+            dev["hostname"] = "Personal device (private MAC)"
+            dev["name_source"] = "private-mac"
+        else:
+            dev["hostname"] = ip_str
+            dev["name_source"] = "unresolved"
+
+    named = sum(1 for d in discovered_dict.values() if d.get("name_source") not in (None, "unresolved"))
+
     discovered = list(discovered_dict.values())
-    logger.info(f"Scan complete: {len(discovered)} hosts found of {len(hosts)} scanned")
+    logger.info(f"Scan complete: {len(discovered)} hosts found of {len(hosts)} scanned, "
+                f"{named} with a resolved name")
     return {
         "discovered": discovered,
         "total":      len(discovered),
@@ -2469,6 +2572,57 @@ def connect_wifi(req: WifiConnectRequest):
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+# Common OUI prefixes. Enough to label the devices that usually appear on a
+# branch LAN without shipping the full 30k-entry IEEE registry.
+_MAC_VENDORS = {
+    "00:1a:11": "Google",  "3c:5a:b4": "Google",  "f4:f5:d8": "Google",
+    "00:03:93": "Apple",   "00:1b:63": "Apple",   "ac:bc:32": "Apple",
+    "f0:18:98": "Apple",   "a4:83:e7": "Apple",   "dc:a9:04": "Apple",
+    "00:16:6c": "Samsung", "78:1f:db": "Samsung", "e8:50:8b": "Samsung",
+    "00:0c:29": "VMware",  "00:50:56": "VMware",  "00:1c:42": "Parallels",
+    "00:15:5d": "Hyper-V", "08:00:27": "VirtualBox",
+    "00:1e:c9": "Dell",    "18:03:73": "Dell",    "f8:bc:12": "Dell",
+    "00:21:5a": "HP",      "3c:d9:2b": "HP",      "94:57:a5": "HP",
+    "00:1f:16": "Lenovo",  "e8:6a:64": "Lenovo",  "54:ee:75": "Lenovo",
+    "00:24:d7": "Intel",   "34:13:e8": "Intel",   "7c:5c:f8": "Intel",
+    "b8:27:eb": "Raspberry Pi", "dc:a6:32": "Raspberry Pi",
+    "00:1d:0f": "TP-Link", "50:c7:bf": "TP-Link", "c4:e9:84": "TP-Link",
+    "00:26:5a": "D-Link",  "00:1e:58": "D-Link",
+    "00:00:48": "Epson",   "00:26:ab": "Epson",
+    "00:80:77": "Brother", "00:1b:a9": "Brother",
+    "00:00:85": "Canon",   "00:1e:8f": "Canon",
+    "00:17:c8": "Kyocera", "00:0b:6b": "Xerox",
+}
+
+
+def _mac_is_randomised(mac: str) -> bool:
+    """True when the MAC is locally administered.
+
+    Phones (iOS 14+, Android 10+) rotate a private random MAC per network. Bit 1
+    of the first octet is set on those. Such a device cannot be identified by
+    vendor and will never publish a hostname - worth saying so explicitly rather
+    than leaving the operator wondering why a machine has no name.
+    """
+    if not mac:
+        return False
+    try:
+        first = int(mac.replace("-", ":").split(":")[0], 16)
+        return bool(first & 0x02)
+    except Exception:
+        return False
+
+
+def _mac_vendor(mac: str) -> str:
+    """Manufacturer name from a MAC address prefix, or '' when unknown."""
+    if not mac:
+        return ""
+    m = mac.lower().replace("-", ":").strip()
+    parts = m.split(":")
+    if len(parts) < 3:
+        return ""
+    return _MAC_VENDORS.get(":".join(parts[:3]), "")
 
 
 def _get_netbios_info(ip_str: str) -> dict:
