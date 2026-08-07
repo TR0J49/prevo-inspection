@@ -1052,6 +1052,7 @@
                         <thead>
                             <tr>
                                 <th>IP Address</th>
+                                <th>IP Range</th>
                                 <th>Hostname</th>
                                 <th>Open Ports</th>
                                 <th>Device Type</th>
@@ -1290,13 +1291,14 @@
                                     <th>Interface</th>
                                     <th>File System</th>
                                     <th>Size</th>
+                                    <th>Used</th>
                                     <th>Free Space</th>
                                     <th>SSD</th>
                                     <th>Firmware</th>
                                 </tr>
                             </thead>
                             <tbody id="diskDetailsBody">
-                                <tr><td colspan="11" style="text-align:center; color:var(--muted);">No disk data available</td></tr>
+                                <tr><td colspan="12" style="text-align:center; color:var(--muted);">No disk data available</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1310,13 +1312,14 @@
                                     <th>#</th>
                                     <th>Name</th>
                                     <th>Total Size</th>
+                                    <th>Used</th>
                                     <th>Free Space</th>
                                     <th>File System</th>
                                     <th>Bootable</th>
                                 </tr>
                             </thead>
                             <tbody id="diskPartitionsBody">
-                                <tr><td colspan="6" style="text-align:center; color:var(--muted);">No partition data available</td></tr>
+                                <tr><td colspan="7" style="text-align:center; color:var(--muted);">No partition data available</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1854,6 +1857,7 @@
                         <thead>
                             <tr>
                                 <th>IP Address</th>
+                                <th>Usable IP Range</th>
                                 <th>Hostname / Device Name</th>
                                 <th>Username</th>
                                 <th>Operating System</th>
@@ -2223,7 +2227,7 @@ function renderScanResults(data) {
     summary.textContent = `${data.total} device${data.total !== 1 ? 's' : ''} found out of ${data.scanned} hosts scanned in ${data.ip_range}`;
 
     if (!data.discovered.length) {
-        tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state">
+        tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
             <div class="empty-icon">📡</div>
             <h3>No devices found</h3>
             <p>No live hosts detected in the scanned range. Try a longer timeout or different range.</p>
@@ -2232,6 +2236,7 @@ function renderScanResults(data) {
         tbody.innerHTML = data.discovered.map(d => `
             <tr class="scan-result-enter">
                 <td><b class="td-mono">${esc(d.ip)}</b></td>
+                <td class="td-mono" style="font-size:11.5px; color:var(--muted); white-space:nowrap;">${esc(d.usable_range || '—')}</td>
                 <td style="color:var(--text-2);">
                     ${esc(d.hostname || d.ip)}
                     ${d.name_source && d.name_source !== 'unresolved'
@@ -2243,6 +2248,11 @@ function renderScanResults(data) {
                 </td>
                 <td>${(d.port_labels || []).map(p => `<span class="port-tag">${esc(p)}</span>`).join(' ')}</td>
                 <td><span class="badge badge-blue">${esc(d.device_type)}</span></td>
+                <td>
+                    ${d.name_source === 'audit'
+                        ? `<span class="badge badge-green">Registered</span>`
+                        : `<button class="btn btn-primary btn-sm" onclick="registerDevice('${esc(d.ip)}','${esc(d.device_type || '')}')" title="Set this device up for auditing">Register Device</button>`}
+                </td>
             </tr>
         `).join('');
     }
@@ -2250,6 +2260,13 @@ function renderScanResults(data) {
     document.getElementById('scanResults').style.display = 'block';
 }
 
+
+// Register a discovered device for auditing. Reuses the remote-audit dialog,
+// which is what actually enrols the machine (WinRM/PsExec on Windows, SSH on
+// Mac/Linux) or hands over the one-line manual command.
+function registerDevice(ip, deviceType) {
+    openRemoteAuditModal(ip, deviceType || '');
+}
 
 function exportScanResults() {
     if (!scanData.length) return;
@@ -2425,13 +2442,36 @@ async function loadSoftwareForDevice() {
         const _tile = (label, value, tone) =>
             `<div><div style="color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">${label}</div>` +
             `<div style="font-size:15px; font-weight:700; color:${tone || 'var(--text)'};">${esc(value || '—')}</div></div>`;
+        // Used is red past 90% full, amber past 75% - a disk about to fill up is
+        // the one storage number an IT manager actually needs to see.
+        const _usedPct = parseInt(ss.used_percent, 10);
+        const _usedTone = isNaN(_usedPct) ? null
+                        : _usedPct >= 90 ? 'var(--danger)'
+                        : _usedPct >= 75 ? 'var(--warning)' : 'var(--text)';
+        const _usedLabel = isNaN(_usedPct) ? 'Used' : `Used (${_usedPct}%)`;
         document.getElementById('storageSummary').innerHTML =
             _tile('Total Storage', ss.storage_total) +
-            _tile(`SSD (${ss.ssd_count || 0})`, ss.ssd_total_size, 'var(--success)') +
+            _tile(_usedLabel, ss.used_total, _usedTone) +
+            _tile('Free', ss.free_total, 'var(--success)') +
+            _tile(`SSD (${ss.ssd_count || 0})`, ss.ssd_total_size) +
             _tile(`HDD (${ss.hdd_count || 0})`, ss.hdd_total_size) +
             _tile('Physical Disks', ss.disk_count);
 
         // --- Storage tab: Disk Details (Excel: Disk Information) ---
+        // Used is size minus free. A raw device that is not mounted reports no
+        // free space at all, so show a dash rather than pretending it is full.
+        const _gb = v => {
+            const m = String(v || '').match(/([\d.]+)\s*([KMGTP]?)/i);
+            if (!m || !m[1]) return NaN;
+            const mult = { K: 1/1048576, M: 1/1024, G: 1, T: 1024, P: 1048576 };
+            return parseFloat(m[1]) * (mult[(m[2] || 'G').toUpperCase()] || 1);
+        };
+        const _diskUsed = d => {
+            const size = _gb(d.size), free = _gb(d.free_space);
+            if (isNaN(size) || isNaN(free)) return '—';
+            const used = Math.max(0, size - free);
+            return `${used.toFixed(2)} GB <span style="color:var(--muted); font-size:11px;">(${Math.round(100*used/size)}%)</span>`;
+        };
         const disks = hw.disk_details || [];
         const diskBody = document.getElementById('diskDetailsBody');
         if (disks.length) {
@@ -2444,12 +2484,13 @@ async function loadSoftwareForDevice() {
                 <td>${esc(d.interface || d.interface_type || '—')}</td>
                 <td>${esc(d.file_system || '—')}</td>
                 <td>${esc(d.size || '—')}</td>
+                <td>${_diskUsed(d)}</td>
                 <td>${esc(d.free_space || '—')}</td>
                 <td><span class="badge badge-${(d.is_ssd||'')=='Yes'?'green':'orange'}">${esc(d.is_ssd || '—')}</span></td>
                 <td style="font-size:12px;">${esc(d.firmware || d.firmware_revision || '—')}</td>
             </tr>`).join('');
         } else {
-            diskBody.innerHTML = '<tr><td colspan="11" style="text-align:center; color:var(--muted);">No disk data available</td></tr>';
+            diskBody.innerHTML = '<tr><td colspan="12" style="text-align:center; color:var(--muted);">No disk data available</td></tr>';
         }
 
         // --- Storage tab: Partitions ---
@@ -2460,12 +2501,13 @@ async function loadSoftwareForDevice() {
                 <td style="color:var(--muted-lt); font-size:12px;">${i+1}</td>
                 <td>${esc(p.drive_letter || p.mount_point || p.name || '—')}</td>
                 <td>${esc(p.size_gb || p.size || '—')}</td>
+                <td>${esc(p.used || _diskUsed({size: p.size_gb || p.size, free_space: p.free_space}).replace(/<[^>]*>/g, ''))}</td>
                 <td>${esc(p.free_space || '—')}</td>
                 <td>${esc(p.file_system || '—')}</td>
                 <td>${esc(p.bootable || '—')}</td>
             </tr>`).join('');
         } else {
-            partBody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--muted);">No partition data available</td></tr>';
+            partBody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--muted);">No partition data available</td></tr>';
         }
 
         // --- Network tab (Excel: all 11 Network Adaptor fields) ---
@@ -3293,7 +3335,7 @@ async function rescanWifiDevices() {
 function renderWifiDevices(devices) {
     const tbody = document.getElementById('wifiDevicesTableBody');
     if (!devices.length) {
-        tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📡</div><h3>No Devices Found</h3><p>Could not discover any live hosts on the current subnet.</p></div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📡</div><h3>No Devices Found</h3><p>Could not discover any live hosts on the current subnet.</p></div></td></tr>`;
         return;
     }
     
@@ -3331,6 +3373,7 @@ function renderWifiDevices(devices) {
         return `
         <tr class="scan-result-enter">
             <td class="td-mono">${esc(d.ip)}</td>
+            <td class="td-mono" style="font-size:11.5px; color:var(--muted); white-space:nowrap;">${esc(d.usable_range || '—')}</td>
             <td style="font-weight:500;">${esc(hostname)}</td>
             <td>${usernameHtml}</td>
             <td>${osHtml}</td>
@@ -3524,6 +3567,21 @@ refreshWifiNetworks();
 // ────────────────────────────────────────────────────────────────────
 //  TAB 6 — ALL DEVICES
 // ────────────────────────────────────────────────────────────────────
+// Audit timestamps arrive in a few shapes:
+//   "29-Jul-2026_17:13:20"  "29-Jul-2026_13.29.14"  "2026-07-27 19:50:00"
+// Comparing them as strings is wrong across months, so parse to a number.
+function _auditTime(v) {
+    if (!v) return 0;
+    const s = String(v).trim();
+    let m = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})[_ ](\d{1,2})[:.](\d{2})[:.](\d{2})/);
+    if (m) {
+        const mon = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11}[m[2].toLowerCase()];
+        if (mon !== undefined) return new Date(+m[3], mon, +m[1], +m[4], +m[5], +m[6]).getTime();
+    }
+    const t = Date.parse(s.replace('_', ' '));
+    return isNaN(t) ? 0 : t;
+}
+
 async function loadAllDevices() {
     const tbody = document.getElementById('allDevicesTableBody');
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--muted);">Loading devices...</td></tr>';
@@ -3537,8 +3595,24 @@ async function loadAllDevices() {
             return;
         }
 
-        tbody.innerHTML = '';
+        // One row per physical machine. The API normally dedupes, but a machine
+        // can arrive under names differing only by case or stray whitespace, and
+        // the file-fallback path picks "latest" by string compare, which is wrong
+        // across months. Collapse by normalised name and keep the newest audit.
+        const byName = new Map();
         data.devices.forEach(d => {
+            const key = (d.computer_name || d.id || '').trim().toLowerCase();
+            if (!key) return;
+            const prev = byName.get(key);
+            if (!prev || _auditTime(d.last_seen) > _auditTime(prev.last_seen)) {
+                byName.set(key, d);
+            }
+        });
+        const unique = [...byName.values()]
+            .sort((a, b) => _auditTime(b.last_seen) - _auditTime(a.last_seen));
+
+        tbody.innerHTML = '';
+        unique.forEach(d => {
             const tr = document.createElement('tr');
 
             // Format datetime

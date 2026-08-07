@@ -794,43 +794,179 @@ DISK_PARTITIONS_JSON="[]"
 if command -v python3 >/dev/null 2>&1; then
     if [ "$OS_NAME" = "macOS" ]; then
         DISK_PARTITIONS_JSON=$(python3 - <<'PYEOF'
-import subprocess, json, re
+import subprocess, json, re, plistlib
+
+# Human names for the partition types diskutil reports. Printing the raw
+# content string ("Apple_APFS_ISC") in a File System column is not useful.
+CONTENT_FS = {
+    'Apple_APFS':           'APFS Container',
+    'Apple_APFS_ISC':       'APFS ISC',
+    'Apple_APFS_Recovery':  'APFS Recovery',
+    'Apple_HFS':            'HFS+',
+    'Apple_Boot':           'Recovery HD',
+    'Apple_CoreStorage':    'CoreStorage',
+    'EFI':                  'EFI (FAT32)',
+    'Microsoft Basic Data': 'NTFS / FAT',
+    'Microsoft Reserved':   'MSR',
+    'Linux Filesystem':     'Linux',
+    'GUID_partition_scheme': 'GPT scheme',
+}
+# Volumes macOS needs in order to boot. Everything else is data.
+BOOT_CONTENT = ('EFI', 'Apple_Boot', 'Apple_APFS_Recovery', 'Apple_APFS_ISC')
+BOOT_VOLUMES = ('Preboot', 'Recovery', 'Update', 'xarts', 'iSCPreboot')
+
+
+def fmt(nbytes):
+    try:
+        b = float(nbytes)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if b <= 0:
+        return "0 GB"
+    # macOS reports decimal GB (1000^3), not GiB - `diskutil` calls a
+    # 494,384,795,648-byte container "494.4 GB". Formatting the same bytes as
+    # GiB gave 460.43 GB, so the Size column disagreed with diskutil and, worse,
+    # subtracting a GiB free value from a decimal size overstated Used by ~24 GB.
+    for unit, div in (('TB', 1e12), ('GB', 1e9), ('MB', 1e6)):
+        if b >= div:
+            return "%.2f %s" % (b / div, unit)
+    return "%.2f KB" % (b / 1e3)
+
+
+def df_map():
+    """device node -> (avail_bytes, used_bytes). `df -h` was being parsed before,
+    which put values like "327Gi" in the table while every other figure was
+    formatted as GB. Use -k and format once, consistently."""
+    out = {}
+    try:
+        r = subprocess.run(['df', '-k'], capture_output=True, text=True, timeout=5)
+        for line in r.stdout.splitlines()[1:]:
+            p = line.split()
+            if len(p) >= 4 and p[0].startswith('/dev/'):
+                try:
+                    out[p[0].replace('/dev/', '')] = (int(p[3]) * 1024, int(p[2]) * 1024)
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+    return out
+
+
+partitions = []
 try:
-    r = subprocess.run(['diskutil', 'list', '-plist'], capture_output=True, text=True, timeout=10)
+    DF = df_map()
+
+    # Every volume in an APFS container draws on one shared free pool, so the
+    # container's free space is the max its volumes report, never the sum.
+    def container_free(ident):
+        free = 0
+        for dev, (avail, _used) in DF.items():
+            if dev.startswith(ident):
+                free = max(free, avail)
+        return free
+
+    raw = subprocess.run(['diskutil', 'list', '-plist'],
+                         capture_output=True, timeout=10)
+    plist = plistlib.loads(raw.stdout)
+
+    # Map each Apple_APFS partition to the container disk it hosts, so a
+    # container partition can report the free space of the volumes inside it.
+    txt = subprocess.run(['diskutil', 'list'], capture_output=True, text=True, timeout=10).stdout
+    part_to_container = {}
+    for line in txt.splitlines():
+        m = re.search(r'Container (disk[0-9]+)\s.*\s(disk[0-9]+s[0-9]+)\s*$', line)
+        if m:
+            part_to_container[m.group(2)] = m.group(1)
+
+    for disk in plist.get('AllDisksAndPartitions', []):
+        # Whole disks are already listed under Disk Information; repeating them
+        # here just added rows whose every column read "Unknown".
+        for p in disk.get('Partitions', []):
+            ident = p.get('DeviceIdentifier', 'Unknown')
+            content = (p.get('Content') or '').strip()
+            free = DF.get(ident, (0, 0))[0]
+            used = DF.get(ident, (0, 0))[1]
+            if not free and ident in part_to_container:
+                free = container_free(part_to_container[ident])
+            size = p.get('Size', 0)
+            if not used and free and size:
+                used = max(0, int(size) - free)
+            partitions.append({
+                "name": ident,
+                "type": content or "Unknown",
+                "size_gb": fmt(size),
+                "used": fmt(used) if used else "Unknown",
+                "free_space": fmt(free) if free else "Unknown",
+                "file_system": CONTENT_FS.get(content, content or "Unknown"),
+                # was hard-coded "Unknown" for every row on every Mac
+                "bootable": "Yes" if content in BOOT_CONTENT else "No",
+            })
+
+        for v in disk.get('APFSVolumes', []):
+            ident = v.get('DeviceIdentifier', 'Unknown')
+            name = (v.get('VolumeName') or '').strip()
+            mount = v.get('MountPoint') or ''
+            # An APFS volume has no fixed size - it grows into the container's
+            # shared pool. Report that pool, and CapacityInUse for what this
+            # particular volume actually occupies.
+            # NOT ident.split('s')[0] - "disk" itself contains an "s", so that
+            # returns "di", which prefix-matches every device on the machine and
+            # handed unmounted volumes the largest free space anywhere on it.
+            whole = re.match(r'(disk[0-9]+)', ident)
+            free = DF.get(ident, (0, 0))[0] or (container_free(whole.group(1)) if whole else 0)
+            partitions.append({
+                "name": ident + ((" (%s)" % name) if name else ""),
+                "type": "APFS Volume",
+                "size_gb": fmt(v.get('Size', 0)),
+                "used": fmt(v.get('CapacityInUse', 0)),
+                "free_space": fmt(free) if free else "Unknown",
+                "file_system": "APFS",
+                "bootable": "Yes" if (mount == '/' or name in BOOT_VOLUMES) else "No",
+            })
+
+    if not partitions:
+        raise ValueError('plist held no partitions')
+except Exception:
+    # Fall back to text parsing if -plist is unavailable or unreadable.
     partitions = []
-    # Fallback to text parsing
-    rt = subprocess.run(['diskutil', 'list'], capture_output=True, text=True, timeout=10)
-    df_out = subprocess.run(['df', '-h'], capture_output=True, text=True, timeout=5).stdout
-    df_map = {}
-    for dfline in df_out.splitlines()[1:]:
-        dparts = dfline.split()
-        if len(dparts) >= 4: df_map[dparts[0]] = (dparts[3], dparts[1])  # avail, size
-    for line in rt.stdout.splitlines():
-        parts = line.split()
-        # `diskutil list` numbers rows as "0:", "1:" — the trailing colon meant
-        # isdigit() never matched and the partition list always came back empty.
-        if parts and parts[0].rstrip(':').isdigit():
-            # The NAME column may be blank or contain spaces ("Container disk3"),
-            # so fixed offsets mis-read the size. Anchor on the tail instead:
-            #   "  2:   Apple_APFS Container disk3   494.4 GB   disk0s2"
-            tail = re.search(r'\*?([\d.]+\s+[KMGT]?B)\s+(\S+)\s*$', line)
-            name  = tail.group(2) if tail else (parts[-1] if len(parts) > 1 else "Unknown")
-            size  = re.sub(r'\s+', ' ', tail.group(1)) if tail else "Unknown"
-            ptype = parts[1] if len(parts) > 1 else "Unknown"
-            free_space = "Unknown"; fs = "Unknown"
-            dev = "/dev/" + name
-            if dev in df_map: free_space, _ = df_map[dev]
-            try:
-                dr = subprocess.run(['diskutil', 'info', name], capture_output=True, text=True, timeout=5)
-                for dl in dr.stdout.splitlines():
-                    if 'File System Personality' in dl or 'Type (Bundle)' in dl:
-                        fs = dl.split(':', 1)[1].strip(); break
-            except: pass
-            partitions.append({"name": name, "type": ptype, "size_gb": size,
-                                "free_space": free_space, "bootable": "Unknown", "file_system": fs})
-    print(json.dumps(partitions))
-except:
-    print("[]")
+    try:
+        rt = subprocess.run(['diskutil', 'list'], capture_output=True, text=True, timeout=10)
+        DF = df_map()
+        for line in rt.stdout.splitlines():
+            parts = line.split()
+            # `diskutil list` numbers rows as "0:", "1:" - the trailing colon meant
+            # isdigit() never matched and the partition list always came back empty.
+            if parts and parts[0].rstrip(':').isdigit():
+                # The NAME column may be blank or contain spaces ("Container disk3"),
+                # so fixed offsets mis-read the size. Anchor on the tail instead:
+                #   "  2:   Apple_APFS Container disk3   494.4 GB   disk0s2"
+                tail = re.search(r'\*?([\d.]+\s+[KMGT]?B)\s+(\S+)\s*$', line)
+                name = tail.group(2) if tail else (parts[-1] if len(parts) > 1 else "Unknown")
+                size = re.sub(r'\s+', ' ', tail.group(1)) if tail else "Unknown"
+                ptype = parts[1] if len(parts) > 1 else "Unknown"
+                if name.count('s') < 1 or not re.match(r'disk[0-9]+s', name):
+                    continue        # whole disk, not a partition
+                avail, used = DF.get(name, (0, 0))
+                fs = CONTENT_FS.get(ptype, "Unknown")
+                try:
+                    dr = subprocess.run(['diskutil', 'info', name],
+                                        capture_output=True, text=True, timeout=5)
+                    for dl in dr.stdout.splitlines():
+                        if 'File System Personality' in dl:
+                            fs = dl.split(':', 1)[1].strip()
+                            break
+                except Exception:
+                    pass
+                partitions.append({
+                    "name": name, "type": ptype, "size_gb": size,
+                    "used": fmt(used) if used else "Unknown",
+                    "free_space": fmt(avail) if avail else "Unknown",
+                    "file_system": fs,
+                    "bootable": "Yes" if ptype in BOOT_CONTENT else "No",
+                })
+    except Exception:
+        partitions = []
+print(json.dumps(partitions))
 PYEOF
 )
     elif command -v lsblk >/dev/null 2>&1; then
@@ -878,12 +1014,116 @@ if command -v python3 >/dev/null 2>&1; then
         DISK_DETAILS_JSON=$(python3 - <<'PYEOF'
 import subprocess, json, re
 disks = []
+
+
+def _sp_hardware_index():
+    """Serial number and firmware for physical drives.
+
+    `diskutil info` does NOT report Device Serial Number or Firmware Revision
+    for Apple internal NVMe drives - those keys are simply absent from its
+    output, which is why both columns read "Unknown". system_profiler has them.
+    Returns {bsd_name: {...}}.
+    """
+    idx = {}
+    try:
+        r = subprocess.run(['system_profiler', '-json',
+                            'SPNVMeDataType', 'SPSerialATADataType', 'SPStorageDataType'],
+                           capture_output=True, text=True, timeout=25)
+        data = json.loads(r.stdout)
+
+        def walk(node):
+            if isinstance(node, list):
+                for x in node:
+                    walk(x)
+            elif isinstance(node, dict):
+                bsd = node.get('bsd_name') or node.get('_name_bsd')
+                if bsd:
+                    idx.setdefault(str(bsd).replace('/dev/', ''), {
+                        'serial':   node.get('device_serial') or '',
+                        'firmware': node.get('device_revision') or '',
+                        'model':    node.get('device_model') or node.get('_name') or '',
+                    })
+                for v in node.values():
+                    walk(v)
+
+        walk(data)
+    except Exception:
+        # -json is macOS 10.15+. Fall back to the plain-text report, where each
+        # drive is a block of "Key: Value" lines ending at its BSD Name.
+        try:
+            r = subprocess.run(['system_profiler', 'SPNVMeDataType', 'SPSerialATADataType'],
+                               capture_output=True, text=True, timeout=25)
+            block = {}
+            for line in r.stdout.splitlines():
+                if ':' not in line:
+                    continue
+                k, v = line.split(':', 1)
+                k, v = k.strip(), v.strip()
+                if k == 'BSD Name' and v:
+                    idx[v] = {'serial': block.get('Serial Number', ''),
+                              'firmware': block.get('Revision', ''),
+                              'model': block.get('Model', '')}
+                    block = {}
+                else:
+                    block[k] = v
+        except Exception:
+            pass
+    return idx
+
+
+def _manufacturer(model, protocol):
+    """Do not hard-code Apple - an external Samsung or SanDisk drive is not."""
+    m = (model or '').strip()
+    up = m.upper()
+    if up.startswith('APPLE') or 'Apple Fabric' in (protocol or ''):
+        return 'Apple'
+    # .title() would render these as Sandisk / Hgst / Lacie, so spell them out.
+    vendors = [
+        ('WESTERN DIGITAL', 'Western Digital'), ('SANDISK', 'SanDisk'),
+        ('SAMSUNG', 'Samsung'), ('SEAGATE', 'Seagate'), ('TOSHIBA', 'Toshiba'),
+        ('KINGSTON', 'Kingston'), ('CRUCIAL', 'Crucial'), ('MICRON', 'Micron'),
+        ('INTEL', 'Intel'), ('HITACHI', 'Hitachi'), ('HGST', 'HGST'),
+        ('LACIE', 'LaCie'), ('TRANSCEND', 'Transcend'), ('ADATA', 'ADATA'),
+        ('CORSAIR', 'Corsair'), ('LEXAR', 'Lexar'), ('WD', 'WD'), ('PNY', 'PNY'),
+    ]
+    for prefix, name in vendors:
+        if up.startswith(prefix):
+            return name
+    return m.split()[0] if m and m != 'Unknown' else 'Unknown'
+
+
 try:
     r = subprocess.run(['diskutil', 'list'], capture_output=True, text=True, timeout=10)
-    # Get top-level disks (e.g. /dev/disk0)
-    top_disks = [l.split()[0] for l in r.stdout.splitlines() if l.startswith('/dev/disk')]
+    # `diskutil list` prints both real drives and APFS containers:
+    #   /dev/disk0 (internal, physical):
+    #   /dev/disk3 (synthesized):        <- lives ON disk0, not a second drive
+    # Counting the synthesized one double-counted the same storage, so a 512 GB
+    # Mac reported ~995 GB total. Keep only the physical devices.
+    top_disks = [l.split()[0] for l in r.stdout.splitlines()
+                 if l.startswith('/dev/disk') and 'physical' in l]
+    if not top_disks:   # very old macOS without the (physical) annotation
+        top_disks = [l.split()[0] for l in r.stdout.splitlines()
+                     if l.startswith('/dev/disk') and 'synthesized' not in l]
+
+    # A physical disk's volumes are not /dev/disk0sN - they sit inside an APFS
+    # container such as /dev/disk3. Learn which containers belong to which drive
+    # so free space and file systems are attributed to the right physical disk.
+    containers = {}
+    _cur = None
+    for _l in r.stdout.splitlines():
+        if _l.startswith('/dev/disk'):
+            _cur = _l.split()[0].rsplit('/', 1)[-1]
+            containers.setdefault(_cur, set())
+        elif _cur and 'Container disk' in _l:
+            _m = re.search(r'Container (disk[0-9]+)', _l)
+            if _m:
+                containers[_cur].add(_m.group(1))
+
+    hw_index = _sp_hardware_index()
+
     for dev in top_disks:
         try:
+            ident = dev.rsplit('/', 1)[-1]
             ir = subprocess.run(['diskutil', 'info', dev], capture_output=True, text=True, timeout=5)
             info = {}
             for line in ir.stdout.splitlines():
@@ -894,71 +1134,101 @@ try:
             size_str = size_bytes[0].strip() if size_bytes else "Unknown"
             is_ssd = "Yes" if info.get('Solid State', '').lower() == 'yes' else "No"
 
-            # A raw disk has no file system of its own — diskutil reports
-            # "File System: Not applicable (no file system)". The old fallback
-            # looked up 'Content', but diskutil names that key 'Content (IOContent)',
-            # so it never matched and every disk came back "Unknown". Report the
-            # partition scheme, plus the file systems actually present on the disk.
-            fs = info.get('File System Personality', '')
-            if not fs:
-                scheme = (info.get('Content (IOContent)') or info.get('Content') or '').strip()
-                child_fs = []
-                try:
-                    ident = dev.rsplit('/', 1)[-1]
-                    lr = subprocess.run(['diskutil', 'list', ident],
-                                        capture_output=True, text=True, timeout=5)
-                    for pl in lr.stdout.splitlines():
-                        pp = pl.split()
-                        if pp and pp[0].rstrip(':').isdigit() and len(pp) > 1:
-                            part = pp[-1]
-                            pi = subprocess.run(['diskutil', 'info', part],
-                                                capture_output=True, text=True, timeout=5)
-                            for il in pi.stdout.splitlines():
-                                if 'File System Personality' in il:
-                                    v = il.split(':', 1)[1].strip()
-                                    if v and v not in child_fs:
-                                        child_fs.append(v)
-                                    break
-                except Exception:
-                    pass
-                if child_fs:
-                    fs = ', '.join(child_fs)
-                elif scheme:
-                    fs = scheme
-                else:
-                    fs = "Unknown"
+            owned = set([ident]) | containers.get(ident, set())
 
-            # A raw device node is not mounted, so `df -h /dev/diskN` reports nothing.
-            # Sum the free space of whatever volumes of this disk are mounted.
+            # A raw device node is not mounted, so `df -h /dev/diskN` reports
+            # nothing. Collect the mounted volumes of this disk - they carry both
+            # the real file system name and the free space.
             free_str = "Unknown"
+            mounted = []
             try:
-                ident = dev.rsplit('/', 1)[-1]
                 dfr = subprocess.run(['df', '-k'], capture_output=True, text=True, timeout=5)
                 free_kb = 0
                 found = False
                 for dfl in dfr.stdout.splitlines()[1:]:
                     dfp = dfl.split()
-                    if len(dfp) >= 4 and dfp[0].startswith('/dev/' + ident):
+                    if len(dfp) >= 4 and any(dfp[0].startswith('/dev/' + o) for o in owned):
+                        mounted.append(dfp[0])
                         try:
-                            free_kb += int(dfp[3])
+                            # Every volume in an APFS container reports the
+                            # SAME shared free space, so summing multiplies it -
+                            # that is how a 494 GB disk showed 1632 GB free.
+                            free_kb = max(free_kb, int(dfp[3]))
                             found = True
                         except ValueError:
                             pass
                 if found:
-                    free_str = "%.2f GB" % (free_kb / 1048576.0)
+                    # Decimal GB to match the size diskutil reports. Dividing by
+                    # 1048576 gave GiB, and Used (size - free) then subtracted
+                    # GiB from decimal GB - two different units.
+                    free_str = "%.2f GB" % (free_kb * 1024 / 1e9)
             except Exception:
                 pass
 
+            # A raw disk has no file system of its own - diskutil reports
+            # "File System: Not applicable (no file system)". Reporting the
+            # partition scheme instead put "GUID_partition_scheme" in the File
+            # System column, which is not a file system. The volumes are what
+            # have one, and on Apple silicon they live inside an APFS container
+            # (/dev/disk3sN), not on /dev/disk0sN - so walking disk0's own
+            # partitions only ever reached the container's physical store, which
+            # has no personality either. Ask the mounted volumes directly.
+            fs = info.get('File System Personality', '')
+            if not fs:
+                child_fs = []
+                for node in mounted[:6]:
+                    try:
+                        pi = subprocess.run(['diskutil', 'info', node],
+                                            capture_output=True, text=True, timeout=5)
+                        for il in pi.stdout.splitlines():
+                            if 'File System Personality' in il:
+                                v = il.split(':', 1)[1].strip()
+                                if v and v not in child_fs:
+                                    child_fs.append(v)
+                                break
+                    except Exception:
+                        pass
+                if not child_fs:
+                    # Nothing mounted (an unformatted or locked drive). Fall back
+                    # to whatever the partition entries themselves report.
+                    try:
+                        lr = subprocess.run(['diskutil', 'list', ident],
+                                            capture_output=True, text=True, timeout=5)
+                        for pl in lr.stdout.splitlines():
+                            pp = pl.split()
+                            if pp and pp[0].rstrip(':').isdigit() and len(pp) > 1:
+                                part = pp[-1]
+                                pi = subprocess.run(['diskutil', 'info', part],
+                                                    capture_output=True, text=True, timeout=5)
+                                for il in pi.stdout.splitlines():
+                                    if 'File System Personality' in il:
+                                        v = il.split(':', 1)[1].strip()
+                                        if v and v not in child_fs:
+                                            child_fs.append(v)
+                                        break
+                    except Exception:
+                        pass
+                fs = ', '.join(child_fs) if child_fs else "Unknown"
+
+            hw = hw_index.get(ident, {})
+            model = (hw.get('model') or info.get('Device / Media Name') or 'Unknown').strip()
+            serial = (hw.get('serial') or info.get('Device Serial Number') or '').strip()
+            firmware = (hw.get('firmware') or info.get('Firmware Revision') or '').strip()
+            protocol = info.get('Protocol', 'Unknown')
+
             disks.append({
-                "name": dev, "interface": info.get('Protocol', 'Unknown'),
+                "name": dev, "interface": protocol,
                 "file_system": fs,
-                "manufacturer": "Apple", "model": info.get('Device / Media Name', 'Unknown'),
-                "serial_number": info.get('Device Serial Number', 'Unknown'),
-                "firmware": info.get('Firmware Revision', 'Unknown'),
+                "manufacturer": _manufacturer(model, protocol),
+                "model": model or "Unknown",
+                "serial_number": serial or "Unknown",
+                "firmware": firmware or "Unknown",
                 "size": size_str, "free_space": free_str, "is_ssd": is_ssd
             })
-        except: pass
-except: pass
+        except Exception:
+            pass
+except Exception:
+    pass
 print(json.dumps(disks))
 PYEOF
 )

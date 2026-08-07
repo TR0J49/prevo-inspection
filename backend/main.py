@@ -12,10 +12,13 @@ from fastapi.responses import FileResponse, Response, PlainTextResponse, JSONRes
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator, ValidationError, ConfigDict
 from typing import List, Union, Optional
+
+
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import letter
+
 from xml.sax.saxutils import escape
 from contextlib import contextmanager
 import os
@@ -886,6 +889,8 @@ def summarise_storage(data) -> dict:
     same figures from whatever its own collector reported."""
     disks = get_hw_list(data, "disk_details")
     ssd_gb = hdd_gb = total_gb = 0.0
+    free_gb = 0.0
+    sized_with_free = 0.0        # capacity of the disks that DID report free space
     ssd_n = hdd_n = 0
     for d in disks:
         dd = d if isinstance(d, dict) else model_to_dict(d)
@@ -899,10 +904,26 @@ def summarise_storage(data) -> dict:
             hdd_gb += gb
             hdd_n += 1
 
+        # Used can only be derived where free space is actually known. Track the
+        # capacity of those disks separately so "used" is never inflated by a
+        # disk whose free space we could not read.
+        fg = _parse_size_gb(dd.get("free_space"))
+        if fg > 0:
+            free_gb += fg
+            sized_with_free += gb
+
+    used_gb = max(0.0, sized_with_free - free_gb)
+
     def fmt(gb):
         if gb <= 0:
             return "0 GB"
         return "%.2f TB" % (gb / 1024) if gb >= 1024 else "%.2f GB" % gb
+
+    # Only show a percentage when EVERY disk reported free space. With partial
+    # coverage the figure would be a share of the measured disks, not of the
+    # machine, and reading it against the total would be wrong.
+    complete = sized_with_free > 0 and abs(sized_with_free - total_gb) < 0.01
+    pct = int(round(100 * used_gb / sized_with_free)) if complete else None
 
     return {
         "disk_count":      str(len(disks)),
@@ -911,6 +932,9 @@ def summarise_storage(data) -> dict:
         "ssd_total_size":  fmt(ssd_gb),
         "hdd_total_size":  fmt(hdd_gb),
         "storage_total":   fmt(total_gb),
+        "used_total":      fmt(used_gb) if sized_with_free > 0 else "Unknown",
+        "free_total":      fmt(free_gb) if sized_with_free > 0 else "Unknown",
+        "used_percent":    str(pct) if pct is not None else "",
     }
 
 
@@ -2171,14 +2195,32 @@ def network_scan(request: NetworkScanRequest):
 
     named = sum(1 for d in discovered_dict.values() if d.get("name_source") not in (None, "unresolved"))
 
+    # Usable host range of the scanned subnet: for a /24 that is .1 to .254,
+    # excluding the network and broadcast addresses which cannot be assigned.
+    usable_range = ""
+    usable_total = 0
+    try:
+        _h = list(network.hosts())
+        if _h:
+            usable_range = f"{_h[0]} - {_h[-1]}"
+            usable_total = len(_h)
+    except Exception:
+        pass
+    for _d in discovered_dict.values():
+        _d["usable_range"] = usable_range
+
     discovered = list(discovered_dict.values())
     logger.info(f"Scan complete: {len(discovered)} hosts found of {len(hosts)} scanned, "
                 f"{named} with a resolved name")
     return {
         "discovered": discovered,
-        "total":      len(discovered),
-        "scanned":    len(hosts),
-        "ip_range":   request.ip_range,
+        "total":        len(discovered),
+        "scanned":      len(hosts),
+        "ip_range":     request.ip_range,
+        "usable_range": usable_range,
+        "usable_total": usable_total,
+        "in_use":       len(discovered),
+        "free":         max(0, usable_total - len(discovered)),
     }
 
 
@@ -2696,6 +2738,25 @@ def wifi_scan_devices(subnet: str = Query(None)):
     scan_req    = NetworkScanRequest(ip_range=subnet, timeout_ms=400)
     scan_result = network_scan(scan_req)
 
+    # Usable host range of the scanned subnet. For a /24 that is .1 to .254 -
+    # the network address and the broadcast address are not assignable.
+    usable_range = ""
+    usable_total = 0
+    try:
+        _net = ipaddress.ip_network(subnet, strict=False)
+        _hosts = list(_net.hosts())
+        if _hosts:
+            usable_range = f"{_hosts[0]} - {_hosts[-1]}"
+            usable_total = len(_hosts)
+        scan_result["subnet"]        = str(_net)
+        scan_result["netmask"]       = str(_net.netmask)
+        scan_result["usable_range"]  = usable_range
+        scan_result["usable_total"]  = usable_total
+        scan_result["in_use"]        = len(scan_result.get("discovered", []))
+        scan_result["free"]          = max(0, usable_total - scan_result["in_use"])
+    except Exception as e:
+        logger.error(f"Usable-range calculation failed for {subnet}: {e}")
+
     # Build audit lookup: ip_address -> {computer_name, os_name, username, last_audit}
     audit_index: dict = {}
 
@@ -2798,6 +2859,9 @@ def wifi_scan_devices(subnet: str = Query(None)):
                 dev["username"] = info["username"]
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
             list(ex.map(_enrich_netbios, unaudited_devices))
+
+    for _d in scan_result.get("discovered", []):
+        _d["usable_range"] = usable_range
 
     return scan_result
 

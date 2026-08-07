@@ -16,11 +16,22 @@
 # IMPORTANT: give the server a fixed address first (DHCP reservation on
 # the router, and a wired connection). If the server's ip changes, every
 # installed PC stops reporting and has to be visited again.
-SERVER_URL=http://192.168.1.26:8000
+SERVER_URL=http://192.168.1.73:8000
 
 # How often the audit runs automatically, in hours.
 # The audit also runs once at every startup, regardless of this value.
 INTERVAL_HOURS=3
+
+# TESTING ONLY. When set to a number above 0 this overrides INTERVAL_HOURS and
+# the audit runs every N minutes instead. Use it to prove the schedule works
+# without waiting 3 hours, then set it back to 0.
+#
+# WARNING: at 5 minutes a single PC uploads 288 audits a day. Until the server
+# only stores an audit when something actually changed, that is roughly
+# 864 files a day PER MACHINE. Use on one test PC, never on a fleet.
+# Also set JITTER_SECONDS below 60 while testing, or the random delay will
+# overlap the next run.
+INTERVAL_MINUTES=0
 
 # Maximum random delay in seconds before each scheduled run.
 # Stops every PC in a branch hitting the server at the same moment.

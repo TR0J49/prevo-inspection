@@ -73,7 +73,22 @@ case "$INTERVAL_HOURS" in ''|*[!0-9]*) INTERVAL_HOURS=3 ;; esac
 case "$JITTER_SECONDS" in ''|*[!0-9]*) JITTER_SECONDS=300 ;; esac
 
 if [ -z "$SERVER_URL" ]; then fail "SERVER_URL missing from config.txt"; exit 1; fi
-ok "Config loaded  (server $SERVER_URL, every ${INTERVAL_HOURS}h)"
+
+# Testing override: run every N minutes instead of every N hours.
+INTERVAL_MINUTES="$(get_cfg INTERVAL_MINUTES)"
+case "$INTERVAL_MINUTES" in ''|*[!0-9]*) INTERVAL_MINUTES=0 ;; esac
+
+if [ "$INTERVAL_MINUTES" -gt 0 ]; then
+    TIMER_SPEC="${INTERVAL_MINUTES}min"
+    CRON_SPEC="*/${INTERVAL_MINUTES} * * * *"
+    SCHEDULE_DESC="every ${INTERVAL_MINUTES} minute(s)"
+    warn "INTERVAL_MINUTES=$INTERVAL_MINUTES - testing mode, not for fleet use"
+else
+    TIMER_SPEC="${INTERVAL_HOURS}h"
+    CRON_SPEC="0 */${INTERVAL_HOURS} * * *"
+    SCHEDULE_DESC="every ${INTERVAL_HOURS} hour(s)"
+fi
+ok "Config loaded  (server $SERVER_URL, $SCHEDULE_DESC)"
 
 # ---------------------------------------------------------------- 4. reachability
 step "Testing connection to the audit server..."
@@ -172,11 +187,11 @@ SVC_EOF
 
     cat > "$TMR" <<TMR_EOF
 [Unit]
-Description=Run the NSDL compliance audit every ${INTERVAL_HOURS} hours
+Description=Run the NSDL compliance audit ${SCHEDULE_DESC}
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=${INTERVAL_HOURS}h
+OnUnitActiveSec=${TIMER_SPEC}
 Persistent=true
 
 [Install]
@@ -186,7 +201,7 @@ TMR_EOF
     systemctl daemon-reload >/dev/null 2>&1
     if systemctl enable --now nsdl-audit.timer >/dev/null 2>&1; then
         SCHEDULED="systemd"
-        ok "Scheduled with systemd: every ${INTERVAL_HOURS} hours, and 5 minutes after boot"
+        ok "Scheduled with systemd: $SCHEDULE_DESC, and 5 minutes after boot"
         step "Missed runs are caught up automatically (Persistent=true)"
     else
         warn "systemd timer could not be enabled, trying cron"
@@ -200,12 +215,12 @@ if [ -z "$SCHEDULED" ]; then
 # NSDL Workstation Compliance Audit
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-0 */${INTERVAL_HOURS} * * * root /bin/bash ${RUNNER}
+${CRON_SPEC} root /bin/bash ${RUNNER}
 @reboot root sleep 300 && /bin/bash ${RUNNER}
 CRON_EOF
         chmod 644 "$CRON"
         SCHEDULED="cron"
-        ok "Scheduled with cron: every ${INTERVAL_HOURS} hours, and 5 minutes after boot"
+        ok "Scheduled with cron: $SCHEDULE_DESC, and 5 minutes after boot"
     else
         fail "Neither systemd nor cron is available - cannot schedule"
         exit 1
@@ -230,7 +245,7 @@ echo ""
 echo "  Computer   : $(hostname)"
 echo "  Device id  : $DEVICE_ID"
 echo "  Server     : $SERVER_URL"
-echo "  Frequency  : every ${INTERVAL_HOURS} hours + after boot"
+echo "  Frequency  : $SCHEDULE_DESC + after boot"
 echo "  Scheduler  : $SCHEDULED"
 echo "  Log file   : $INSTALL_DIR/audit.log"
 echo ""

@@ -57,8 +57,19 @@ case "$JITTER_SECONDS" in ''|*[!0-9]*) JITTER_SECONDS=300 ;; esac
 if [ -z "$SERVER_URL" ]; then
     fail "SERVER_URL missing from config.txt"; read -r -p "  Press Enter to exit "; exit 1
 fi
-INTERVAL_SECONDS=$((INTERVAL_HOURS * 3600))
-ok "Config loaded  (server $SERVER_URL, every ${INTERVAL_HOURS}h)"
+# Testing override: run every N minutes instead of every N hours.
+INTERVAL_MINUTES="$(get_cfg INTERVAL_MINUTES)"
+case "$INTERVAL_MINUTES" in ''|*[!0-9]*) INTERVAL_MINUTES=0 ;; esac
+
+if [ "$INTERVAL_MINUTES" -gt 0 ]; then
+    INTERVAL_SECONDS=$((INTERVAL_MINUTES * 60))
+    SCHEDULE_DESC="every ${INTERVAL_MINUTES} minute(s)"
+    warn "INTERVAL_MINUTES=$INTERVAL_MINUTES - testing mode, not for fleet use"
+else
+    INTERVAL_SECONDS=$((INTERVAL_HOURS * 3600))
+    SCHEDULE_DESC="every ${INTERVAL_HOURS} hour(s)"
+fi
+ok "Config loaded  (server $SERVER_URL, $SCHEDULE_DESC)"
 
 # ---------------------------------------------------------------- 3. reachability
 step "Testing connection to the audit server..."
@@ -174,9 +185,9 @@ chown root:wheel "$PLIST"
 chmod 644 "$PLIST"
 
 if launchctl bootstrap system "$PLIST" 2>/dev/null; then
-    ok "Scheduled: every ${INTERVAL_HOURS} hours, and at every startup"
+    ok "Scheduled: $SCHEDULE_DESC, and at every startup"
 elif launchctl load -w "$PLIST" 2>/dev/null; then
-    ok "Scheduled: every ${INTERVAL_HOURS} hours, and at every startup (legacy loader)"
+    ok "Scheduled: $SCHEDULE_DESC, and at every startup (legacy loader)"
 else
     fail "Could not register the LaunchDaemon"
     read -r -p "  Press Enter to exit "; exit 1
@@ -200,7 +211,7 @@ echo ""
 echo "  Computer   : $(hostname)"
 echo "  Device id  : $DEVICE_ID"
 echo "  Server     : $SERVER_URL"
-echo "  Frequency  : every ${INTERVAL_HOURS} hours + at startup"
+echo "  Frequency  : $SCHEDULE_DESC + at startup"
 echo "  Log file   : $INSTALL_DIR/audit.log"
 echo ""
 echo "  This Mac will now audit itself automatically."
